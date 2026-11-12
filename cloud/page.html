@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>広告アカウント 毎朝の一覧</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&family=Roboto+Mono:wght@500;700&display=swap">
+<style>
+:root{--paper:#F7F8FA;--card:#FFF;--ink:#16202B;--ink-soft:#5A6675;--line:#DDE3EA;
+ --accent:#14284B;--accent-soft:#E7ECF4;--mark:#F07A12;--ok:#1C7A4B;--mid:#A8700A;--bad:#BC2E24;
+ --sans:"Noto Sans JP",system-ui,sans-serif;--mono:"Roboto Mono",ui-monospace,monospace}
+@media (prefers-color-scheme:dark){:root{--paper:#11161C;--card:#192028;--ink:#E7EDF4;--ink-soft:#97A4B4;
+ --line:#2C3843;--accent:#9FBCE6;--accent-soft:#1E2A3C;--mark:#F59B4B;--ok:#59C98C;--mid:#DEAF4B;--bad:#F0766A;color-scheme:dark}}
+*{box-sizing:border-box}
+body{background:var(--paper);color:var(--ink);font-family:var(--sans);line-height:1.6;margin:0}
+.wrap{max-width:1000px;margin:0 auto;padding:28px 16px 60px}
+h1{font-size:clamp(1.3rem,1rem+1.2vw,1.7rem);margin:0 0 4px;font-weight:700}
+.meta{color:var(--ink-soft);font-size:.85rem;margin:0 0 18px}
+.gate{max-width:380px;margin:14vh auto;background:var(--card);border:1px solid var(--line);
+ border-radius:12px;padding:24px}
+.gate h1{font-size:1.1rem;margin:0 0 4px}
+.gate p{font-size:.82rem;color:var(--ink-soft);margin:0 0 16px}
+.gate input{width:100%;padding:10px 12px;font:400 1rem var(--sans);border:1px solid var(--line);
+ border-radius:8px;background:var(--paper);color:var(--ink)}
+.gate button{width:100%;margin-top:10px;padding:10px;border:0;border-radius:8px;background:var(--accent);
+ color:#fff;font:700 .95rem var(--sans);cursor:pointer}
+.gate .err{color:var(--bad);font-size:.82rem;margin-top:10px;min-height:1.2em}
+.big{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:10px}
+.big div{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:13px 15px}
+.big dt{font-size:.7rem;color:var(--ink-soft);letter-spacing:.06em;margin:0}
+.big dd{margin:3px 0 0;font:700 1.5rem/1.15 var(--mono);font-variant-numeric:tabular-nums}
+.big dd small{font:500 .7rem var(--sans);color:var(--ink-soft)}
+h2{font-size:1rem;margin:30px 0 10px;padding-bottom:6px;border-bottom:2px solid var(--line)}
+table{width:100%;border-collapse:collapse;font-size:.86rem}
+.tscroll{overflow-x:auto}
+th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line)}
+th{font-size:.7rem;color:var(--ink-soft);font-weight:500;letter-spacing:.05em;white-space:nowrap}
+td.n{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+tr.warn td{background:color-mix(in srgb,var(--bad) 7%,transparent)}
+tr.acc{cursor:pointer}
+tr.acc:hover td{background:var(--accent-soft)}
+.flag{display:inline-block;font:500 .68rem/1.5 var(--sans);padding:1px 7px;border-radius:4px;
+ background:color-mix(in srgb,var(--bad) 15%,transparent);color:var(--bad);white-space:nowrap}
+.flag.mute{background:var(--accent-soft);color:var(--ink-soft)}
+.det{background:var(--paper)}
+.det table{font-size:.8rem}
+.det th{font-size:.66rem}
+.lpname{word-break:break-all}
+a{color:var(--accent)}
+.hint{color:var(--ink-soft);font-size:.78rem;margin-top:10px}
+</style></head><body>
+<div id="gate" class="gate">
+  <h1>広告アカウント 毎朝の一覧</h1>
+  <p>中身はパスワードで暗号化されています。</p>
+  <input id="pw" type="password" autocomplete="current-password" placeholder="パスワード">
+  <button id="go">開く</button>
+  <div class="err" id="err"></div>
+</div>
+<div class="wrap" id="app" hidden></div>
+<script id="enc" type="application/json">__ENC__</script>
+<script>
+const ENC = JSON.parse(document.getElementById('enc').textContent);
+const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+const yen = v => v==null?'—':Math.round(v).toLocaleString('ja-JP')+'円';
+const esc = s => (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+async function decrypt(pw){
+  const km = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveKey']);
+  const key = await crypto.subtle.deriveKey(
+    {name:'PBKDF2', salt:b64(ENC.salt), iterations:ENC.iter, hash:'SHA-256'},
+    km, {name:'AES-GCM', length:256}, false, ['decrypt']);
+  const plain = await crypto.subtle.decrypt({name:'AES-GCM', iv:b64(ENC.iv)}, key, b64(ENC.data));
+  return JSON.parse(new TextDecoder().decode(plain));
+}
+
+function render(D){
+  const known = D.accounts.filter(a => !a.cvUnset);
+  const t = known.reduce((a,x)=>({cost:a.cost+x.cost, cv:a.cv+x.cv}), {cost:0,cv:0});
+  const unsetCost = D.accounts.filter(a=>a.cvUnset).reduce((a,x)=>a+x.cost,0);
+  const rows = D.accounts.map((a,i) =>
+    '<tr class="acc'+((a.zeroCost>0||a.noTracking)&&!a.cvUnset?' warn':'')+'" data-i="'+i+'">'
+    + '<td>'+esc(a.name)+(a.error?'<div class="flag">'+esc(a.error)+'</div>':'')+'</td>'
+    + '<td class="n">'+yen(a.cost)+'</td>'
+    + '<td class="n">'+(a.cvUnset?'—':a.cv)+'</td>'
+    + '<td class="n">'+(a.cvUnset?'—':(a.cv?yen(a.cost/a.cv):'—'))+'</td>'
+    + '<td>'+(a.cvUnset?'<span class="flag mute">CVの定義が未設定</span>'
+        :(a.noTracking?'<span class="flag">CVイベントが1件も無い</span>'
+        :(a.zeroCost>0?'<span class="flag">CV0のLPに'+yen(a.zeroCost)+'</span>':'')))+'</td></tr>'
+    + '<tr class="det" id="d'+i+'" hidden><td colspan="5">'+lpTable(a)+'</td></tr>').join('');
+  document.getElementById('app').innerHTML =
+    '<h1>広告アカウント 毎朝の一覧</h1>'
+    + '<p class="meta">'+esc(D.period)+' ・ 更新 '+esc(D.ranAt)+' ・ '+D.accounts.length+'アカウント</p>'
+    + '<dl class="big">'
+      + '<div><dt>消化</dt><dd>'+yen(t.cost)+'</dd></div>'
+      + '<div><dt>CV</dt><dd>'+t.cv+'<small> 件</small></dd></div>'
+      + '<div><dt>CPA</dt><dd>'+(t.cv?yen(t.cost/t.cv):'—')+'</dd></div>'
+      + (unsetCost?'<div><dt>CV未設定</dt><dd>'+yen(unsetCost)+'<small> の消化</small></dd></div>':'')
+    + '</dl>'
+    + '<h2>アカウントごと（行をクリックするとLPの内訳）</h2>'
+    + '<div class="tscroll"><table><thead><tr><th>アカウント</th><th>消化</th><th>CV</th><th>CPA</th>'
+    + '<th>気になるところ</th></tr></thead><tbody>'+rows+'</tbody></table></div>'
+    + '<p class="hint">CVの定義はアカウントごとに設定したもの。未設定のアカウントは上の集計に入れていない。</p>';
+  document.getElementById('app').hidden = false;
+  document.getElementById('gate').hidden = true;
+  document.querySelectorAll('tr.acc').forEach(tr => tr.addEventListener('click', () => {
+    const d = document.getElementById('d'+tr.dataset.i); d.hidden = !d.hidden;
+  }));
+}
+
+function lpTable(a){
+  if (!a.lps || !a.lps.length) return '<p class="hint">消化のある広告がありません。</p>';
+  return '<div class="tscroll"><table><thead><tr><th>LP</th><th>枚</th><th>消化</th><th>CTR</th>'
+    + '<th>CV</th><th>CPA</th></tr></thead><tbody>'
+    + a.lps.map(l => {
+        const ctr = l.imp ? (l.click/l.imp*100).toFixed(2)+'%' : '—';
+        return '<tr'+(l.cv?'':' class="warn"')+'><td class="lpname">'+esc(l.url)+'</td>'
+          + '<td class="n">'+l.n+'</td><td class="n">'+yen(l.cost)+'</td><td class="n">'+ctr+'</td>'
+          + '<td class="n">'+l.cv+'</td><td class="n">'+(l.cv?yen(l.cost/l.cv):'—')+'</td></tr>'
+          + (l.ads||[]).map(ad => '<tr><td style="padding-left:26px">'+esc(ad.name)
+              + ' <span style="color:var(--ink-soft)">'+esc(ad.set)+'</span>'
+              + (ad.link?' <a href="'+esc(ad.link)+'" target="_blank" rel="noopener">管理画面</a>':'')
+              + '</td><td></td><td class="n">'+yen(ad.cost)+'</td><td class="n">'+(ad.ctr||0)+'%</td>'
+              + '<td class="n">'+ad.cv+'</td><td class="n">'+(ad.cv?yen(ad.cost/ad.cv):'—')+'</td></tr>').join('');
+      }).join('')
+    + '</tbody></table></div>';
+}
+
+async function tryOpen(){
+  const pw = document.getElementById('pw').value;
+  const err = document.getElementById('err');
+  if (!pw) { err.textContent = 'パスワードを入れてください'; return; }
+  err.textContent = '開いています…';
+  try {
+    const D = await decrypt(pw);
+    try { sessionStorage.setItem('adpw', pw); } catch (e) {}
+    render(D);
+  } catch (e) { err.textContent = 'パスワードが違います'; }
+}
+document.getElementById('go').addEventListener('click', tryOpen);
+document.getElementById('pw').addEventListener('keydown', e => { if (e.key === 'Enter') tryOpen(); });
+(async () => {
+  let saved = null;
+  try { saved = sessionStorage.getItem('adpw'); } catch (e) {}
+  if (saved) { try { render(await decrypt(saved)); } catch (e) {} }
+  document.getElementById('pw').focus();
+})();
+</script></body></html>

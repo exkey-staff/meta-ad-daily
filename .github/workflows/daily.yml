@@ -1,0 +1,44 @@
+name: 毎朝の取得
+
+on:
+  schedule:
+    - cron: "0 20 * * *"      # 20:00 UTC = 日本時間 5:00
+  workflow_dispatch:           # 手動でも回せる
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet cryptography
+      - name: 実績を取って画面を作る
+        env:
+          META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
+          VIEW_PASSWORD: ${{ secrets.VIEW_PASSWORD }}
+          META_CV_CONFIG: config/meta_cv.json
+        run: python3 cloud/build.py --days 28 --out docs
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
