@@ -9,10 +9,11 @@ Macに依存する処理（OCR＝バナーの文字読み取り）は入れな�
 import argparse
 import base64
 import collections
+import contextlib
 import datetime as dt
+import io
 import json
 import os
-import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -40,15 +41,19 @@ def collect(tok, since, until, min_spend):
         ins = (a.get("insights") or {}).get("data") or []
         if not ins or float(ins[0].get("spend") or 0) < min_spend:
             continue
-        print(f"- {a.get('name','')} ({a['id']})", flush=True)
+        # 公開リポジトリではActionsのログも公開されるので、
+        # クライアント名・LPのURL・CVの名前はログに出さない（IDだけ）
+        print(f"- {a['id']}", flush=True)
         import types
         args = types.SimpleNamespace(account=a["id"], since=since, until=until,
                                      cv_action=None, no_images=True, spent_only=True,
                                      out=os.path.join("/tmp/meta", a["id"]))
+        hidden = io.StringIO()
         try:
-            rows = M.cmd_insights(args)
+            with contextlib.redirect_stdout(hidden):
+                rows = M.cmd_insights(args)
         except SystemExit as e:
-            print(f"   ! {e}", flush=True)
+            print("   ! 取得できず", flush=True)
             out.append({"id": a["id"], "name": a.get("name", ""), "error": str(e)[:160],
                         "cost": 0, "cv": 0, "cvUnset": True, "lps": []})
             continue
@@ -116,8 +121,8 @@ def main():
     known = [x for x in accounts if not x["cvUnset"]]
     c = sum(x["cost"] for x in known)
     v = sum(x["cv"] for x in known)
-    print(f"\n{len(accounts)}アカウント / 設定済み{len(known)}: 消化{c:,.0f}円 CV{v} "
-          + (f"CPA{round(c/v):,}円" if v else "CPA—"))
+    print(f"\n{len(accounts)}アカウント / CV設定済み{len(known)}件 / 未設定{len(accounts)-len(known)}件")
+    print("※ 金額とクライアント名はログに出さない（公開リポジトリのため）。画面で見る")
     print(f"→ {a.out}/index.html")
 
 
