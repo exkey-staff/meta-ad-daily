@@ -14,9 +14,15 @@ import datetime as dt
 import io
 import json
 import os
+import re
+import subprocess
 import sys
+import unicodedata
+from concurrent.futures import ThreadPoolExecutor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+CHROME_CANDIDATES = ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser",
+                     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 import meta_api as M                                   # noqa: E402
 
@@ -32,6 +38,92 @@ def encrypt(payload, password):
     ct = AESGCM(key).encrypt(iv, json.dumps(payload, ensure_ascii=False).encode("utf-8"), None)
     b64 = lambda b: base64.b64encode(b).decode()
     return {"salt": b64(salt), "iv": b64(iv), "data": b64(ct), "iter": 250000}
+
+
+TAG_DROP = re.compile(r"(?is)<(script|style|noscript|svg|iframe)\b.*?</\1>")
+TAGS = re.compile(r"(?s)<[^>]+>")
+
+
+def norm(s):
+    """突き合わせ用に文字をそろえる。"""
+    s = unicodedata.normalize("NFKC", s or "").lower()
+    s = re.sub(r"[\s\u3000]+", "", s)
+    s = re.sub(r"(?<=\d),(?=\d)", "", s)
+    s = re.sub(r"[,、。・！!？?「」『』〈〉《》（）()\[\]【】{}~〜ー\-–—_/／\\|:：;；\"'’”“※*＊＋+=…‥､｡]", "", s)
+    return s
+
+
+def longest_common(needle, hay):
+    n = len(needle)
+    for length in range(n, 1, -1):
+        for i in range(0, n - length + 1):
+            if needle[i:i + length] in hay:
+                return needle[i:i + length]
+    return ""
+
+
+def html_to_lines(html):
+    body = TAG_DROP.sub(" ", html)
+    body = re.sub(r"(?i)<(br|/p|/div|/li|/h[1-6]|/td|/tr|/span)[^>]*>", "\n", body)
+    body = TAGS.sub(" ", body)
+    body = unicodedata.normalize("NFKC", body)
+    for a, b in (("&nbsp;", " "), ("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"),
+                 ("&quot;", '"'), ("&#039;", "'")):
+        body = body.replace(a, b)
+    return [re.sub(r"[ \t\u3000]+", " ", l).strip() for l in body.splitlines() if l.strip()]
+
+
+def fetch_lp_text(url, timeout=40):
+    """LPの本文。JSで描くページはChromeで描画してから取る。"""
+    lines = []
+    try:
+        import urllib.request
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                                                   "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            lines = html_to_lines(r.read().decode("utf-8", "replace"))
+    except Exception:
+        pass
+    if len(lines) >= 20:
+        return lines
+    for exe in CHROME_CANDIDATES:
+        try:
+            r = subprocess.run([exe, "--headless=new", "--disable-gpu", "--no-sandbox",
+                                "--virtual-time-budget=9000", "--dump-dom", url],
+                               capture_output=True, text=True, timeout=90)
+            if r.stdout:
+                l2 = html_to_lines(r.stdout)
+                if len(l2) > len(lines):
+                    lines = l2
+            break
+        except FileNotFoundError:
+            continue
+        except Exception:
+            break
+    return lines
+
+
+def match_copy(texts, lp_lines):
+    """広告のテキストがLP本文に実在するか。クリック後に話が変わっていないかを見る。"""
+    hay = norm(" ".join(lp_lines))
+    if not hay:
+        return None
+    rows = []
+    for slot in ("title", "desc", "body"):
+        for t in (texts.get(slot) or []):
+            for piece in re.split(r"[\n。！!？?]+", t):
+                n = norm(piece)
+                if len(n) < 6:
+                    continue
+                hit = longest_common(n, hay)
+                rows.append({"slot": slot, "text": piece.strip()[:60],
+                             "rate": round(len(hit) / len(n), 2)})
+                break          # 1つのテキストにつき先頭の一文だけ見る
+    if not rows:
+        return None
+    rate = sum(r["rate"] for r in rows) / len(rows)
+    return {"rate": round(rate, 2), "rows": rows[:6],
+            "missing": [r["text"] for r in rows if r["rate"] < 0.35][:3]}
 
 
 def thumb_data_uri(path, px=200, quality=62):
@@ -80,7 +172,10 @@ def collect(tok, since, until, min_spend):
             lp = r.get("LP") or "(LPが取れず)"
             key = (lp, r["広告名"])
             m = ads.setdefault(key, {"lp": lp, "name": r["広告名"], "sets": [], "img": "",
-                                     "link": r.get("管理画面", ""), "d": {}})
+                                     "link": r.get("管理画面", ""), "d": {},
+                                     "texts": r.get("広告文") or {}})
+            if not m.get("texts", {}).get("title") and (r.get("広告文") or {}).get("title"):
+                m["texts"] = r["広告文"]
             day = m["d"].setdefault(r.get("日付") or "?", [0.0, 0.0, 0.0, 0.0])
             day[0] += r["消化"]
             day[1] += r.get("表示") or 0
@@ -105,7 +200,7 @@ def collect(tok, since, until, min_spend):
                 m["img"] = thumb_data_uri(m["img"]) if (tot >= 10000 and i < 6) else ""
             lps.append({"url": u, "cost": tot,
                         "ads": [{"name": m["name"], "sets": m["sets"], "link": m["link"],
-                                 "img": m["img"],
+                                 "img": m["img"], "texts": m.get("texts") or {},
                                  "d": {k: [round(v[0]), int(v[1]), int(v[2]), int(v[3])]
                                        for k, v in sorted(m["d"].items())}}
                                 for m in items[:8]]})
@@ -120,6 +215,36 @@ def collect(tok, since, until, min_spend):
             "lps": lps,
         })
     return out
+
+
+def add_lp_match(accounts, workers=5):
+    """表示するLPの本文を取り、広告のテキストと突き合わせる。"""
+    urls = []
+    for a in accounts:
+        for l in a["lps"]:
+            if l["cost"] >= 10000 and l["url"].startswith("http") and l["url"] not in urls:
+                urls.append(l["url"])
+    if not urls:
+        return
+    print(f"\nLPの本文を取得中… {len(urls)}本", flush=True)
+    texts = {}
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        for u, lines in zip(urls, ex.map(fetch_lp_text, urls)):
+            texts[u] = lines
+    thin = sum(1 for u in urls if len(texts.get(u) or []) < 25)
+    print(f"  取れた {sum(1 for u in urls if texts.get(u))}本 / 本文が短く照合できない {thin}本", flush=True)
+
+    for a in accounts:
+        for l in a["lps"]:
+            lines = texts.get(l["url"]) or []
+            l["lpLines"] = len(lines)
+            l["lpThin"] = len(lines) < 25 or len("".join(lines)) < 400
+            if l["lpThin"]:
+                continue
+            for ad in l["ads"]:
+                m = match_copy(ad.get("texts") or {}, lines)
+                if m:
+                    ad["match"] = m
 
 
 def main():
@@ -139,6 +264,7 @@ def main():
     until = dt.date.today() - dt.timedelta(days=1)
     since = until - dt.timedelta(days=a.days - 1)
     accounts = collect(tok, str(since), str(until), a.min_spend)
+    add_lp_match(accounts)
 
     payload = {"since": str(since), "until": str(until), "period": f"{since}〜{until}",
                "ranAt": dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),

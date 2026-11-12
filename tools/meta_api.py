@@ -36,7 +36,7 @@ INSIGHT_FIELDS = ("ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,"
                   "spend,impressions,clicks,ctr,cpc,cpm,frequency,reach,"
                   "actions,cost_per_action_type")
 AD_FIELDS = ("id,name,status,effective_status,adset{id,name},campaign{id,name},"
-             "creative{id,name,image_url,image_hash,thumbnail_url,object_story_spec,asset_feed_spec,"
+             "creative{id,name,title,body,image_url,image_hash,thumbnail_url,object_story_spec,asset_feed_spec,"
              "effective_object_story_id,instagram_permalink_url}")
 
 # CVとして数えたい順（先に見つかったものを使う）
@@ -176,6 +176,43 @@ def lp_url(creative):
             if isinstance(u.get(f), str) and u[f].startswith("http"):
                 return u[f]
     return ""
+
+
+def ad_texts(creative):
+    """広告のテキスト（見出し・本文・説明・CTA）を集める。
+
+    Advantage+ は asset_feed_spec に複数パターンが入る。カルーセルはカードごと。
+    画像の中の文字はここには入らない（それはOCRでしか取れない）。
+    """
+    out = {"title": [], "body": [], "desc": [], "cta": []}
+    if not creative:
+        return out
+    if creative.get("title"):
+        out["title"].append(creative["title"])
+    if creative.get("body"):
+        out["body"].append(creative["body"])
+    spec = creative.get("object_story_spec") or {}
+    for k in ("link_data", "video_data", "template_data"):
+        d = spec.get(k) or {}
+        for f, slot in (("name", "title"), ("message", "body"),
+                        ("description", "desc"), ("caption", "desc")):
+            if d.get(f):
+                out[slot].append(d[f])
+        cta = (d.get("call_to_action") or {}).get("type")
+        if cta:
+            out["cta"].append(cta)
+        for ch in (d.get("child_attachments") or []):
+            for f, slot in (("name", "title"), ("description", "desc")):
+                if ch.get(f):
+                    out[slot].append(ch[f])
+    afs = creative.get("asset_feed_spec") or {}
+    for f, slot in (("titles", "title"), ("bodies", "body"), ("descriptions", "desc")):
+        for x in (afs.get(f) or []):
+            if x.get("text"):
+                out[slot].append(x["text"])
+    for k in out:
+        out[k] = list(dict.fromkeys(out[k]))[:8]
+    return out
 
 
 def image_hashes(creative):
@@ -469,6 +506,7 @@ def cmd_insights(args):
             "状態": ad.get("effective_status", ""),
             "画像URL": next((hashmap[h] for h in image_hashes(cre) if h in hashmap),
                            image_url(cre)),
+            "広告文": ad_texts(cre),
             "管理画面": ("https://adsmanager.facebook.com/adsmanager/manage/ads?act="
                      + args.account.replace("act_", "")
                      + "&selected_ad_ids=" + str(r.get("ad_id"))),
