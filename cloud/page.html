@@ -189,7 +189,7 @@ function render(){
   let lps = [];
   for (const x of accs) for (const l of (x.lps||[])) {
     const t = lpTotals(l,a,b);
-    if (t.cost >= 10000 && l.ads.some(ad=>ad.img)) lps.push({lp:l, t, accName:x.name, cvUnset:x.cvUnset, key:x.id+'|'+l.url});
+    if (t.cost >= 10000) lps.push({lp:l, t, accName:x.name, cvUnset:x.cvUnset, key:x.id+'|'+l.url});
   }
   if (only) lps = lps.filter(o => o.lp.ads.some(ad => judge(sum(ad,a,b), o.t)[0]==='bad'));
   lps.sort((x,y)=> y.t.cost - x.t.cost);

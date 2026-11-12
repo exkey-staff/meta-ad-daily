@@ -148,6 +148,19 @@ def main():
     html = tpl.replace("__ENC__", json.dumps(encrypt(payload, pw), ensure_ascii=False))
     with open(os.path.join(a.out, "index.html"), "w", encoding="utf-8") as f:
         f.write(html)
+
+    # 画像なしの軽い版。重くて開けない端末のため（数字と判定はそのまま）
+    import copy
+    light = copy.deepcopy(payload)
+    for acc0 in light["accounts"]:
+        for l in acc0["lps"]:
+            for ad in l["ads"]:
+                ad["img"] = ""
+    lhtml = tpl.replace("__ENC__", json.dumps(encrypt(light, pw), ensure_ascii=False))
+    lhtml = lhtml.replace("<title>バナーの効き方</title>", "<title>バナーの効き方（軽い版）</title>")
+    with open(os.path.join(a.out, "light.html"), "w", encoding="utf-8") as f:
+        f.write(lhtml)
+    print(f"   軽い版: {len(lhtml)/1024:.0f} KB")
     with open(os.path.join(a.out, ".nojekyll"), "w") as f:
         f.write("")
     known = [x for x in accounts if not x["cvUnset"]]
