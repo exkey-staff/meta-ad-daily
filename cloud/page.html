@@ -51,6 +51,8 @@ select,input[type=date],.btn{font:500 .82rem var(--sans);background:var(--card);
 .tag.bad{background:color-mix(in srgb,var(--bad) 15%,transparent);color:var(--bad)}
 .tag.mid{background:color-mix(in srgb,var(--mid) 18%,transparent);color:var(--mid)}
 .tag.mute{background:var(--accent-soft);color:var(--ink-soft)}
+.tag.off{background:var(--accent-soft);color:var(--ink-soft);border:1px solid var(--line)}
+.b.off{opacity:.72}
 .b a{display:block;font-size:.72rem;margin-top:7px}
 .rep{margin-top:12px;background:var(--card);border:1px solid var(--mark);border-radius:10px;padding:14px 16px}
 .rep h3{margin:0 0 8px;font-size:.9rem}
@@ -75,7 +77,7 @@ function b64(s){                     // 8MBを1バイトずつ変換すると固
 }
 const yen = v => v==null?'—':Math.round(v).toLocaleString('ja-JP')+'円';
 const esc = s => (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-let D=null, acc='all', only=false, days=14, from=null, to=null, reports={}, show=6, renderToken=0;
+let D=null, acc='all', only=false, days=14, from=null, to=null, reports={}, show=6, renderToken=0, hideOff=false;
 
 async function decrypt(pw){
   const km = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveKey']);
@@ -97,13 +99,26 @@ function sum(ad, a, b){
   for (const [day,x] of Object.entries(ad.d)) if (day>=a && day<=b){c+=x[0];i+=x[1];k+=x[2];v+=x[3];}
   return {cost:c, imp:i, click:k, cv:v, ctr: i? k/i*100 : 0, cpa: v? c/v : null};
 }
+const ST = {ACTIVE:['ok','配信中'], PAUSED:['off','停止中'],
+            ADSET_PAUSED:['off','停止中（広告セット）'], CAMPAIGN_PAUSED:['off','停止中（キャンペーン）'],
+            DISAPPROVED:['bad','却下'], WITH_ISSUES:['mid','問題あり'], ARCHIVED:['off','アーカイブ']};
+function statusOf(ad){
+  const st = ad.st || [];
+  if (!st.length) return ['mute','状態不明', true];
+  if (st.includes('ACTIVE')) return ['ok','配信中', true];
+  const s0 = ST[st[0]] || ['mute', st[0]];
+  return [s0[0], s0[1], false];           // 3つ目は「配信中か」
+}
+function visibleAds(lp){
+  return hideOff ? lp.ads.filter(ad => statusOf(ad)[2]) : lp.ads;
+}
 function lpMatchAvg(lp){
-  const r = lp.ads.map(ad => ad.match && ad.match.rate).filter(v => typeof v === 'number');
+  const r = visibleAds(lp).map(ad => ad.match && ad.match.rate).filter(v => typeof v === 'number');
   return r.length ? r.reduce((x,y)=>x+y,0)/r.length : null;
 }
 function imgGap(ad, lp){
   /* バナー画像の中の文言がLPに出てこないか。他の枚と比べて明らかに低いものだけ。 */
-  const r = lp.ads.map(x => x.imgMatch && x.imgMatch.rate).filter(v => typeof v === 'number');
+  const r = visibleAds(lp).map(x => x.imgMatch && x.imgMatch.rate).filter(v => typeof v === 'number');
   if (!ad.imgMatch || r.length < 2) return null;
   const avg = r.reduce((x,y)=>x+y,0)/r.length;
   if (ad.imgMatch.rate >= avg * 0.8 || ad.imgMatch.rate >= 0.7) return null;
@@ -119,7 +134,7 @@ function copyGap(ad, lp){
 }
 function lpTotals(lp, a, b){
   const t = {cost:0,imp:0,click:0,cv:0};
-  for (const ad of lp.ads){ const s=sum(ad,a,b); t.cost+=s.cost; t.imp+=s.imp; t.click+=s.click; t.cv+=s.cv; }
+  for (const ad of visibleAds(lp)){ const s=sum(ad,a,b); t.cost+=s.cost; t.imp+=s.imp; t.click+=s.click; t.cv+=s.cv; }
   t.ctr = t.imp? t.click/t.imp*100 : 0; t.cpa = t.cv? t.cost/t.cv : null;
   return t;
 }
@@ -140,12 +155,13 @@ function judge(s, t, ad, lp){
 function analyze(lp, accName){
   const [a,b] = range();
   const t = lpTotals(lp,a,b);
-  const rows = lp.ads.map(ad => ({ad, s:sum(ad,a,b)})).filter(x=>x.s.cost>0)
+  const rows = visibleAds(lp).map(ad => ({ad, s:sum(ad,a,b)})).filter(x=>x.s.cost>0)
                      .sort((x,y)=>y.s.cost-x.s.cost);
   if (!rows.length) return 'この期間に配信がありません。';
   const L = [];
   L.push(`【${accName}】${lp.url}`);
   L.push(`期間 ${a} 〜 ${b}`);
+  if (hideOff) L.push('（停止中のバナーは除いています）');
   L.push('');
   L.push(`全体：消化 ${yen(t.cost)} / 表示 ${t.imp.toLocaleString()} / クリック ${t.click.toLocaleString()}`
     + ` / CTR ${t.ctr.toFixed(2)}% / CV ${t.cv}件` + (t.cpa?` / CPA ${yen(t.cpa)}`:' / CPA —'));
@@ -156,7 +172,7 @@ function analyze(lp, accName){
   if (win.length){
     L.push('■ 効いているバナー');
     for (const x of win){
-      L.push(`・${x.ad.name}：CPA ${yen(x.s.cpa)}（CV ${x.s.cv}件 / 消化 ${yen(x.s.cost)} / CTR ${x.s.ctr.toFixed(2)}%）`);
+      L.push(`・${x.ad.name}［${statusOf(x.ad)[1]}］：CPA ${yen(x.s.cpa)}（CV ${x.s.cv}件 / 消化 ${yen(x.s.cost)} / CTR ${x.s.ctr.toFixed(2)}%）`);
       if (x.ad.imgText && x.ad.imgText.length)
         L.push(`　 バナーの文言：${x.ad.imgText.slice(0,3).map(v=>'「'+v+'」').join('')}`);
       const tt = (x.ad.texts && x.ad.texts.title && x.ad.texts.title[0]) || '';
@@ -173,7 +189,7 @@ function analyze(lp, accName){
     L.push('■ 獲得できていないバナー');
     for (const x of bad){
       const hi = x.s.ctr >= t.ctr, g = copyGap(x.ad, lp);
-      L.push(`・${x.ad.name}：消化 ${yen(x.s.cost)} / CTR ${x.s.ctr.toFixed(2)}%（全体 ${t.ctr.toFixed(2)}%）/ CV 0件`);
+      L.push(`・${x.ad.name}［${statusOf(x.ad)[1]}］：消化 ${yen(x.s.cost)} / CTR ${x.s.ctr.toFixed(2)}%（全体 ${t.ctr.toFixed(2)}%）/ CV 0件`);
       if (x.ad.imgText && x.ad.imgText.length)
         L.push(`　 バナーの文言：${x.ad.imgText.slice(0,3).map(v=>'「'+v+'」').join('')}`);
       const tt = (x.ad.texts && x.ad.texts.title && x.ad.texts.title[0]) || '';
@@ -226,9 +242,11 @@ function card(ad, t, lp){
   const [a,b] = range(); const s = sum(ad,a,b);
   const [cls, label] = judge(s,t,ad,lp);
   const gap = lp ? (imgGap(ad, lp) || copyGap(ad, lp)) : null;
-  return '<div class="b '+(cls==='ok'?'win':(cls==='bad'?'lose':''))+'">'
+  const live = statusOf(ad)[2];
+  return '<div class="b '+(cls==='ok'?'win':(cls==='bad'?'lose':''))+(live?'':' off')+'">'
     + (ad.img ? '<img src="'+ad.img+'" alt="'+esc(ad.name)+'" loading="lazy">' : '<div class="noimg">画像なし</div>')
     + '<div class="body"><div class="nm">'+esc(ad.name)+'</div>'
+    + '<span class="tag '+statusOf(ad)[0]+'">'+statusOf(ad)[1]+'</span>'
     + '<dl class="kv"><dt>消化</dt><dd>'+yen(s.cost)+'</dd>'
     + '<dt>CTR</dt><dd>'+(s.imp?s.ctr.toFixed(2)+'%':'—')+'</dd>'
     + '<dt>CV</dt><dd>'+s.cv+'</dd>'
@@ -259,7 +277,7 @@ function render(){
     const t = lpTotals(l,a,b);
     if (t.cost >= 10000) lps.push({lp:l, t, accName:x.name, cvUnset:x.cvUnset, key:x.id+'|'+l.url});
   }
-  if (only) lps = lps.filter(o => o.lp.ads.some(ad => judge(sum(ad,a,b), o.t, ad, o.lp)[0]==='bad'));
+  if (only) lps = lps.filter(o => visibleAds(o.lp).some(ad => judge(sum(ad,a,b), o.t, ad, o.lp)[0]==='bad'));
   lps.sort((x,y)=> y.t.cost - x.t.cost);
   const total = lps.length;
   const shown = lps.slice(0, show);     // 一度に全部描くと重いので小分けにする
@@ -278,6 +296,7 @@ function render(){
       + D.accounts.map(x=>'<option value="'+esc(x.id)+'"'+(x.id===acc?' selected':'')+'>'+esc(x.name)+'</option>').join('')
       + '</select>'
       + '<button class="btn" id="only" aria-pressed="'+only+'">効いていない枚だけ</button>'
+      + '<button class="btn" id="off" aria-pressed="'+hideOff+'">停止中を除く</button>'
       + '<span class="meta" id="cnt">LP '+total+'本</span>'
     + '</div>'
     + '<div id="lps"></div>'
@@ -316,7 +335,7 @@ function render(){
       + (reports[o.key] ? '<div class="rep"><h3>分析（'+a+' 〜 '+b+'）</h3><pre>'+esc(reports[o.key])+'</pre>'
           + '<div class="act"><button class="btn" data-copy="'+esc(o.key)+'">コピー</button>'
           + '<button class="btn" data-close="'+esc(o.key)+'">閉じる</button></div></div>' : '')
-      + '<div class="grid">'+o.lp.ads.map(ad=>card(ad,o.t,o.lp)).join('')+'</div>';
+      + '<div class="grid">'+visibleAds(o.lp).map(ad=>card(ad,o.t,o.lp)).join('')+'</div>';
     box.appendChild(sec);
     document.getElementById('cnt').textContent = 'LP '+total+'本（'+drawn+'本を表示中）';
     requestAnimationFrame(step);
@@ -346,6 +365,7 @@ function render(){
     document.getElementById('t').addEventListener('change', e => { to = e.target.value; from = from || a; reports={}; show=6; render(); });
     document.getElementById('acc').addEventListener('change', e => { acc = e.target.value; show=6; render(); });
     document.getElementById('only').addEventListener('click', () => { only = !only; show=6; render(); });
+    document.getElementById('off').addEventListener('click', () => { hideOff = !hideOff; reports={}; show=6; render(); });
   }
 }
 
