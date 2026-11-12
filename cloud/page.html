@@ -97,20 +97,32 @@ function sum(ad, a, b){
   for (const [day,x] of Object.entries(ad.d)) if (day>=a && day<=b){c+=x[0];i+=x[1];k+=x[2];v+=x[3];}
   return {cost:c, imp:i, click:k, cv:v, ctr: i? k/i*100 : 0, cpa: v? c/v : null};
 }
+function lpMatchAvg(lp){
+  const r = lp.ads.map(ad => ad.match && ad.match.rate).filter(v => typeof v === 'number');
+  return r.length ? r.reduce((x,y)=>x+y,0)/r.length : null;
+}
+function copyGap(ad, lp){
+  /* 同じLPに出している他のバナーと比べて、明らかに噛み合っていないものだけ拾う。
+     広告文とLP本文は元々言い回しが違うので、絶対値では判定しない。 */
+  const avg = lpMatchAvg(lp);
+  if (avg == null || !ad.match) return null;
+  if (ad.match.rate >= avg * 0.8 || ad.match.rate >= 0.6) return null;
+  return {rate: ad.match.rate, avg, missing: (ad.match.missing || []).slice(0, 3)};
+}
 function lpTotals(lp, a, b){
   const t = {cost:0,imp:0,click:0,cv:0};
   for (const ad of lp.ads){ const s=sum(ad,a,b); t.cost+=s.cost; t.imp+=s.imp; t.click+=s.click; t.cv+=s.cv; }
   t.ctr = t.imp? t.click/t.imp*100 : 0; t.cpa = t.cv? t.cost/t.cv : null;
   return t;
 }
-function judge(s, t, ad){
+function judge(s, t, ad, lp){
   const share = t.cost ? s.cost/t.cost : 0;
-  const m = ad && ad.match;
+  const gap = (ad && lp) ? copyGap(ad, lp) : null;
   if (s.cv > 0 && t.cpa && s.cpa <= t.cpa) return ['ok','効いている'];
   if (s.cv > 0) return ['mid','獲得はあるが平均より高い'];
   if (share < 0.08 || s.click < 30) return ['mute','配信が少なく判断できない'];
   if (s.ctr >= t.ctr){
-    if (m && m.missing && m.missing.length) return ['bad','LPに無いことを言ってクリックを集めている'];
+    if (gap) return ['bad','LPと噛み合っていない文言でクリックを集めている'];
     return ['bad','クリックは取れているがCV0'];
   }
   return ['bad','クリックもCVも取れていない'];
@@ -130,9 +142,9 @@ function analyze(lp, accName){
   L.push(`全体：消化 ${yen(t.cost)} / 表示 ${t.imp.toLocaleString()} / クリック ${t.click.toLocaleString()}`
     + ` / CTR ${t.ctr.toFixed(2)}% / CV ${t.cv}件` + (t.cpa?` / CPA ${yen(t.cpa)}`:' / CPA —'));
   L.push('');
-  const win = rows.filter(x=>judge(x.s,t,x.ad)[0]==='ok');
-  const bad = rows.filter(x=>judge(x.s,t,x.ad)[0]==='bad');
-  const thin = rows.filter(x=>judge(x.s,t,x.ad)[0]==='mute');
+  const win = rows.filter(x=>judge(x.s,t,x.ad,lp)[0]==='ok');
+  const bad = rows.filter(x=>judge(x.s,t,x.ad,lp)[0]==='bad');
+  const thin = rows.filter(x=>judge(x.s,t,x.ad,lp)[0]==='mute');
   if (win.length){
     L.push('■ 効いているバナー');
     for (const x of win){
@@ -150,12 +162,13 @@ function analyze(lp, accName){
   if (bad.length){
     L.push('■ 獲得できていないバナー');
     for (const x of bad){
-      const hi = x.s.ctr >= t.ctr, m = x.ad.match;
+      const hi = x.s.ctr >= t.ctr, g = copyGap(x.ad, lp);
       L.push(`・${x.ad.name}：消化 ${yen(x.s.cost)} / CTR ${x.s.ctr.toFixed(2)}%（全体 ${t.ctr.toFixed(2)}%）/ CV 0件`);
       const tt = (x.ad.texts && x.ad.texts.title && x.ad.texts.title[0]) || '';
       if (tt) L.push(`　 広告の見出し：「${tt}」`);
-      if (hi && m && m.missing && m.missing.length){
-        L.push(`　 この文言がLPに出てきません：${m.missing.map(v=>'「'+v+'」').join('、')}`);
+      if (hi && g){
+        L.push(`　 LPとの一致 ${Math.round(g.rate*100)}%（このLPの平均 ${Math.round(g.avg*100)}%）。他の枚より噛み合っていません。`);
+        if (g.missing.length) L.push(`　 LPに出てこない文言：${g.missing.map(v=>'「'+v+'」').join('、')}`);
         L.push('　 クリックは平均以上に取れているので、言っていることがLPで受け止められていない可能性があります。');
       } else if (hi){
         L.push('　 クリックは平均以上に取れているので、クリック後で落ちています。');
@@ -188,9 +201,10 @@ function analyze(lp, accName){
   return L.join('\n');
 }
 
-function card(ad, t){
+function card(ad, t, lp){
   const [a,b] = range(); const s = sum(ad,a,b);
-  const [cls, label] = judge(s,t,ad);
+  const [cls, label] = judge(s,t,ad,lp);
+  const gap = lp ? copyGap(ad, lp) : null;
   return '<div class="b '+(cls==='ok'?'win':(cls==='bad'?'lose':''))+'">'
     + (ad.img ? '<img src="'+ad.img+'" alt="'+esc(ad.name)+'" loading="lazy">' : '<div class="noimg">画像なし</div>')
     + '<div class="body"><div class="nm">'+esc(ad.name)+'</div>'
@@ -201,10 +215,11 @@ function card(ad, t){
     + ((ad.texts && ad.texts.title && ad.texts.title.length)
         ? '<div class="copy">'+esc(ad.texts.title[0])
           + (ad.texts.title.length>1 ? ' ほか'+(ad.texts.title.length-1)+'本' : '')+'</div>' : '')
-    + (ad.match ? '<div class="copy">LPとの一致 '+Math.round(ad.match.rate*100)+'%</div>' : '')
+    + (ad.match ? '<div class="copy">LPとの一致 '+Math.round(ad.match.rate*100)+'%'
+        + (gap ? '（このLPの平均 '+Math.round(gap.avg*100)+'%）' : '')+'</div>' : '')
     + '<span class="tag '+cls+'">'+label+'</span>'
-    + (ad.match && ad.match.missing && ad.match.missing.length
-        ? '<span class="tag bad">LPに無い：'+esc(ad.match.missing[0])+'</span>' : '')
+    + (gap && gap.missing.length
+        ? '<span class="tag bad">LPに無い：'+esc(gap.missing[0])+'</span>' : '')
     + (ad.sets && ad.sets.length>1 ? '<span class="tag mute">'+ad.sets.length+'つの広告セットに同じ絵</span>' : '')
     + (ad.link ? '<a href="'+esc(ad.link)+'" target="_blank" rel="noopener">管理画面で見る</a>' : '')
     + '</div></div>';
@@ -218,7 +233,7 @@ function render(){
     const t = lpTotals(l,a,b);
     if (t.cost >= 10000) lps.push({lp:l, t, accName:x.name, cvUnset:x.cvUnset, key:x.id+'|'+l.url});
   }
-  if (only) lps = lps.filter(o => o.lp.ads.some(ad => judge(sum(ad,a,b), o.t, ad)[0]==='bad'));
+  if (only) lps = lps.filter(o => o.lp.ads.some(ad => judge(sum(ad,a,b), o.t, ad, o.lp)[0]==='bad'));
   lps.sort((x,y)=> y.t.cost - x.t.cost);
   const total = lps.length;
   const shown = lps.slice(0, show);     // 一度に全部描くと重いので小分けにする
@@ -275,7 +290,7 @@ function render(){
       + (reports[o.key] ? '<div class="rep"><h3>分析（'+a+' 〜 '+b+'）</h3><pre>'+esc(reports[o.key])+'</pre>'
           + '<div class="act"><button class="btn" data-copy="'+esc(o.key)+'">コピー</button>'
           + '<button class="btn" data-close="'+esc(o.key)+'">閉じる</button></div></div>' : '')
-      + '<div class="grid">'+o.lp.ads.map(ad=>card(ad,o.t)).join('')+'</div>';
+      + '<div class="grid">'+o.lp.ads.map(ad=>card(ad,o.t,o.lp)).join('')+'</div>';
     box.appendChild(sec);
     document.getElementById('cnt').textContent = 'LP '+total+'本（'+drawn+'本を表示中）';
     requestAnimationFrame(step);
