@@ -34,7 +34,7 @@ def encrypt(payload, password):
     return {"salt": b64(salt), "iv": b64(iv), "data": b64(ct), "iter": 250000}
 
 
-def thumb_data_uri(path, px=260, quality=70):
+def thumb_data_uri(path, px=200, quality=62):
     """バナーを画面に埋め込める形にする。並べて見比べられる大きさで。"""
     try:
         from PIL import Image
@@ -101,8 +101,8 @@ def collect(tok, since, until, min_spend):
             for m in items:
                 m["cost"] = sum(v[0] for v in m["d"].values())
             items.sort(key=lambda m: -m["cost"])
-            for m in items[:8]:
-                m["img"] = thumb_data_uri(m["img"]) if tot >= 10000 else ""
+            for i, m in enumerate(items[:8]):
+                m["img"] = thumb_data_uri(m["img"]) if (tot >= 10000 and i < 6) else ""
             lps.append({"url": u, "cost": tot,
                         "ads": [{"name": m["name"], "sets": m["sets"], "link": m["link"],
                                  "img": m["img"],

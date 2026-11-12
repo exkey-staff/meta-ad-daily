@@ -67,7 +67,11 @@ a{color:var(--accent)}
 <script id="enc" type="application/json">__ENC__</script>
 <script>
 const ENC = JSON.parse(document.getElementById('enc').textContent);
-const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+function b64(s){                     // 8MBを1バイトずつ変換すると固まるので、まとめて書く
+  const bin = atob(s), n = bin.length, a = new Uint8Array(n);
+  for (let i = 0; i < n; i++) a[i] = bin.charCodeAt(i);
+  return a;
+}
 const yen = v => v==null?'—':Math.round(v).toLocaleString('ja-JP')+'円';
 const esc = s => (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 let D=null, acc='all', only=false, days=14, from=null, to=null, reports={};
@@ -244,9 +248,18 @@ function render(){
 async function tryOpen(){
   const pw = document.getElementById('pw').value, err = document.getElementById('err');
   if (!pw) { err.textContent='パスワードを入れてください'; return; }
-  err.textContent='開いています…';
-  try { D = await decrypt(pw); try{sessionStorage.setItem('adpw',pw);}catch(e){} render(); }
-  catch(e){ err.textContent='パスワードが違います'; }
+  err.textContent='開いています… 画像が多いので少しかかります';
+  await new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
+  try {
+    D = await decrypt(pw);
+    try{sessionStorage.setItem('adpw',pw);}catch(e){}
+    err.textContent='表示しています…';
+    await new Promise(r => setTimeout(r, 0));
+    render();
+  } catch(e){
+    err.textContent = (e && e.name === 'OperationError')
+      ? 'パスワードが違います' : '開けませんでした（' + (e && e.message || e) + '）';
+  }
 }
 document.getElementById('go').addEventListener('click', tryOpen);
 document.getElementById('pw').addEventListener('keydown', e => { if(e.key==='Enter') tryOpen(); });
