@@ -368,6 +368,8 @@ def cmd_insights(args):
     tr = json.dumps({"since": args.since, "until": args.until})
     print(f"実績を取得中… {args.account} {args.since}〜{args.until}")
     q = {"level": "ad", "fields": INSIGHT_FIELDS, "time_range": tr}
+    if getattr(args, "daily", False):
+        q["time_increment"] = 1
     if args.spent_only:
         q["filtering"] = json.dumps([{"field": "spend", "operator": "GREATER_THAN", "value": 0}])
     ins = paged(f"{args.account}/insights", q, tok)
@@ -432,6 +434,7 @@ def cmd_insights(args):
         cv_unknown = want is None
         spend = float(r.get("spend") or 0)
         rows.append({
+            "日付": r.get("date_start", ""),
             "広告名": r.get("ad_name") or ad.get("name", ""),
             "広告ID": r.get("ad_id"),
             "広告セット": r.get("adset_name", ""),
@@ -482,7 +485,7 @@ def cmd_insights(args):
                 r["画像"] = ""
         print(f"  {got}枚 → {img_dir}")
 
-    cols = ["広告名", "広告セット", "キャンペーン", "LP", "消化", "表示", "クリック", "CTR",
+    cols = ["日付", "広告名", "広告セット", "キャンペーン", "LP", "消化", "表示", "クリック", "CTR",
             "CV", "CPA", "CVの種類", "CV未設定", "CV系イベント有無", "状態", "画像", "広告ID", "広告セットID",
             "管理画面", "画像URL", "LP_元のURL"]
     csv_path = os.path.join(args.out, "実績.csv")

@@ -60,7 +60,7 @@ def collect(tok, since, until, min_spend):
         print(f"- {a['id']}", flush=True)
         import types
         args = types.SimpleNamespace(account=a["id"], since=since, until=until,
-                                     cv_action=None, no_images=False, spent_only=True,
+                                     cv_action=None, no_images=False, spent_only=True, daily=True,
                                      out=os.path.join("/tmp/meta", a["id"]))
         hidden = io.StringIO()
         try:
@@ -73,50 +73,50 @@ def collect(tok, since, until, min_spend):
             continue
         rows = [r for r in rows if (r.get("消化") or 0) > 0]
         unset = bool(rows) and all(r.get("CV未設定") for r in rows)
-        bylp = collections.defaultdict(lambda: {"cost": 0.0, "cv": 0.0, "imp": 0.0,
-                                                "click": 0.0, "n": 0, "ads": []})
+
+        # 広告×LP単位にまとめ、日別の数字を配列で持つ
+        ads = collections.OrderedDict()
         for r in rows:
-            d = bylp[r.get("LP") or "(LPが取れず)"]
-            d["cost"] += r["消化"]
-            d["cv"] += 0 if r.get("CV未設定") else (r["CV"] or 0)
-            d["imp"] += r.get("表示") or 0
-            d["click"] += r.get("クリック") or 0
-            d["n"] += 1
-            d["ads"].append({"name": r["広告名"], "set": r["広告セット"], "cost": r["消化"],
-                             "cv": 0 if r.get("CV未設定") else (r["CV"] or 0),
-                             "ctr": r.get("CTR"), "imp": r.get("表示") or 0,
-                             "click": r.get("クリック") or 0,
-                             "link": r.get("管理画面", ""),
-                             "img": thumb_data_uri(r.get("画像") or "")})
+            lp = r.get("LP") or "(LPが取れず)"
+            key = (lp, r["広告名"])
+            m = ads.setdefault(key, {"lp": lp, "name": r["広告名"], "sets": [], "img": "",
+                                     "link": r.get("管理画面", ""), "d": {}})
+            day = m["d"].setdefault(r.get("日付") or "?", [0.0, 0.0, 0.0, 0.0])
+            day[0] += r["消化"]
+            day[1] += r.get("表示") or 0
+            day[2] += r.get("クリック") or 0
+            day[3] += 0 if r.get("CV未設定") else (r["CV"] or 0)
+            if r.get("広告セット") and r["広告セット"] not in m["sets"]:
+                m["sets"].append(r["広告セット"])
+            if not m["img"] and r.get("画像"):
+                m["img"] = r["画像"]
+
+        bylp = collections.defaultdict(list)
+        for m in ads.values():
+            bylp[m["lp"]].append(m)
+
         lps = []
-        for u, d in sorted(bylp.items(), key=lambda kv: -kv[1]["cost"]):
-            merged = collections.OrderedDict()
-            for ad in d["ads"]:
-                m = merged.setdefault(ad["name"], {"name": ad["name"], "sets": [], "cost": 0.0,
-                                                   "cv": 0.0, "imp": 0.0, "click": 0.0,
-                                                   "img": "", "link": ad["link"]})
-                m["cost"] += ad["cost"]
-                m["cv"] += ad["cv"]
-                m["imp"] += ad["imp"]
-                m["click"] += ad["click"]
-                m["img"] = m["img"] or ad["img"]
-                if ad["set"] and ad["set"] not in m["sets"]:
-                    m["sets"].append(ad["set"])
-            ads = sorted(merged.values(), key=lambda x: (-(x["cv"] or 0), -x["cost"]))
-            if d["cost"] < 10000:          # 消化の小さいLPは画像を載せない（重くなるため）
-                for ad in ads:
-                    ad["img"] = ""
-            lps.append({"url": u, **{k: d[k] for k in ("cost", "cv", "imp", "click", "n")},
-                        "ads": ads[:8]})
+        for u, items in bylp.items():
+            tot = sum(sum(v[0] for v in m["d"].values()) for m in items)
+            for m in items:
+                m["cost"] = sum(v[0] for v in m["d"].values())
+            items.sort(key=lambda m: -m["cost"])
+            for m in items[:8]:
+                m["img"] = thumb_data_uri(m["img"]) if tot >= 10000 else ""
+            lps.append({"url": u, "cost": tot,
+                        "ads": [{"name": m["name"], "sets": m["sets"], "link": m["link"],
+                                 "img": m["img"],
+                                 "d": {k: [round(v[0]), int(v[1]), int(v[2]), int(v[3])]
+                                       for k, v in sorted(m["d"].items())}}
+                                for m in items[:8]]})
+        lps.sort(key=lambda l: -l["cost"])
+
         out.append({
             "id": a["id"], "name": a.get("name", ""), "error": "",
-            "cost": sum(r["消化"] for r in rows),
-            "cv": 0 if unset else int(sum((r["CV"] or 0) for r in rows if not r.get("CV未設定"))),
             "cvUnset": unset,
             "cvName": next((r.get("CVの種類") for r in rows if r.get("CVの種類")), ""),
             "noTracking": (not unset and not any(r.get("CV系イベント有無") for r in rows)
                            and bool(rows)),
-            "zeroCost": 0 if unset else sum(l["cost"] for l in lps if not l["cv"]),
             "lps": lps,
         })
     return out
@@ -140,7 +140,7 @@ def main():
     since = until - dt.timedelta(days=a.days - 1)
     accounts = collect(tok, str(since), str(until), a.min_spend)
 
-    payload = {"period": f"{since}〜{until}",
+    payload = {"since": str(since), "until": str(until), "period": f"{since}〜{until}",
                "ranAt": dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
                "accounts": accounts}
     os.makedirs(a.out, exist_ok=True)
@@ -151,9 +151,10 @@ def main():
     with open(os.path.join(a.out, ".nojekyll"), "w") as f:
         f.write("")
     known = [x for x in accounts if not x["cvUnset"]]
-    c = sum(x["cost"] for x in known)
-    v = sum(x["cv"] for x in known)
-    print(f"\n{len(accounts)}アカウント / CV設定済み{len(known)}件 / 未設定{len(accounts)-len(known)}件")
+    nlp = sum(len(x["lps"]) for x in accounts)
+    nimg = sum(1 for x in accounts for l in x["lps"] for ad in l["ads"] if ad["img"])
+    print(f"\n{len(accounts)}アカウント / CV設定済み{len(known)}件 / 未設定{len(accounts)-len(known)}件"
+          f" / LP{nlp}本 / バナー画像{nimg}枚")
     print("※ 金額とクライアント名はログに出さない（公開リポジトリのため）。画面で見る")
     print(f"→ {a.out}/index.html")
 
