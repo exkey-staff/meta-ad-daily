@@ -74,7 +74,7 @@ function b64(s){                     // 8MBを1バイトずつ変換すると固
 }
 const yen = v => v==null?'—':Math.round(v).toLocaleString('ja-JP')+'円';
 const esc = s => (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-let D=null, acc='all', only=false, days=14, from=null, to=null, reports={};
+let D=null, acc='all', only=false, days=14, from=null, to=null, reports={}, show=12;
 
 async function decrypt(pw){
   const km = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveKey']);
@@ -193,6 +193,8 @@ function render(){
   }
   if (only) lps = lps.filter(o => o.lp.ads.some(ad => judge(sum(ad,a,b), o.t)[0]==='bad'));
   lps.sort((x,y)=> y.t.cost - x.t.cost);
+  const total = lps.length;
+  const shown = lps.slice(0, show);     // 一度に全部描くと重いので小分けにする
 
   document.getElementById('app').innerHTML =
     '<h1>バナーの効き方</h1>'
@@ -207,9 +209,9 @@ function render(){
       + D.accounts.map(x=>'<option value="'+esc(x.id)+'"'+(x.id===acc?' selected':'')+'>'+esc(x.name)+'</option>').join('')
       + '</select>'
       + '<button class="btn" id="only" aria-pressed="'+only+'">効いていない枚だけ</button>'
-      + '<span class="meta">LP '+lps.length+'本</span>'
+      + '<span class="meta">LP '+total+'本'+(show<total?'（'+shown.length+'本を表示中）':'')+'</span>'
     + '</div>'
-    + (lps.length ? lps.map(o =>
+    + (shown.length ? shown.map(o =>
         '<section class="lp"><div class="lphead">'
         + '<span class="u">'+esc(o.lp.url)+'</span><span class="acc">'+esc(o.accName)+'</span>'
         + '<span class="sum">消化'+yen(o.t.cost)+' ・ CTR'+o.t.ctr.toFixed(2)+'% ・ CV'
@@ -220,19 +222,23 @@ function render(){
             + '<button class="btn" data-close="'+esc(o.key)+'">閉じる</button></div></div>' : '')
         + '<div class="grid">'+o.lp.ads.map(ad=>card(ad,o.t)).join('')+'</div></section>').join('')
       : '<p class="note">この期間に表示できるバナーがありません。</p>')
+    + (show < total ? '<p style="margin-top:22px"><button class="btn" id="more">'
+        + 'つづきを表示（あと'+(total-show)+'本）</button></p>' : '')
     + '<p class="note">「効いている」はLP平均CPAより安く獲得できた枚。'
     + '「クリックは取れているがCV0」は平均以上のCTRでクリックを集めながら獲得ゼロの枚。'
     + '消化がLPの8%未満、またはクリック30未満の枚は判断材料が足りないので判定しません。</p>';
 
+  const more = document.getElementById('more');
+  if (more) more.addEventListener('click', () => { show += 12; render(); });
   document.querySelectorAll('.seg button').forEach(bn => bn.addEventListener('click', () => {
-    days = +bn.dataset.days; from = to = null; reports = {}; render();
+    days = +bn.dataset.days; from = to = null; reports = {}; show = 12; render();
   }));
   document.getElementById('f').addEventListener('change', e => { from = e.target.value; to = to || b; reports={}; render(); });
   document.getElementById('t').addEventListener('change', e => { to = e.target.value; from = from || a; reports={}; render(); });
   document.getElementById('acc').addEventListener('change', e => { acc = e.target.value; render(); });
   document.getElementById('only').addEventListener('click', () => { only = !only; render(); });
   document.querySelectorAll('.go').forEach(bn => bn.addEventListener('click', () => {
-    const o = lps.find(x => x.key === bn.dataset.key);
+    const o = shown.find(x => x.key === bn.dataset.key);
     reports[bn.dataset.key] = analyze(o.lp, o.accName);
     render();
   }));
