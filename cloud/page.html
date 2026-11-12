@@ -74,7 +74,7 @@ function b64(s){                     // 8MBを1バイトずつ変換すると固
 }
 const yen = v => v==null?'—':Math.round(v).toLocaleString('ja-JP')+'円';
 const esc = s => (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-let D=null, acc='all', only=false, days=14, from=null, to=null, reports={}, show=12;
+let D=null, acc='all', only=false, days=14, from=null, to=null, reports={}, show=6, renderToken=0;
 
 async function decrypt(pw){
   const km = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveKey']);
@@ -196,6 +196,7 @@ function render(){
   const total = lps.length;
   const shown = lps.slice(0, show);     // 一度に全部描くと重いので小分けにする
 
+  // まず枠だけ出して画面を見せる。LPは1本ずつ足す（まとめて描くと固まるため）
   document.getElementById('app').innerHTML =
     '<h1>バナーの効き方</h1>'
     + '<p class="meta">データは '+esc(D.since)+' 〜 '+esc(D.until)+' ・ 更新 '+esc(D.ranAt)+'</p>'
@@ -209,34 +210,51 @@ function render(){
       + D.accounts.map(x=>'<option value="'+esc(x.id)+'"'+(x.id===acc?' selected':'')+'>'+esc(x.name)+'</option>').join('')
       + '</select>'
       + '<button class="btn" id="only" aria-pressed="'+only+'">効いていない枚だけ</button>'
-      + '<span class="meta">LP '+total+'本'+(show<total?'（'+shown.length+'本を表示中）':'')+'</span>'
+      + '<span class="meta" id="cnt">LP '+total+'本</span>'
     + '</div>'
-    + (shown.length ? shown.map(o =>
-        '<section class="lp"><div class="lphead">'
-        + '<span class="u">'+esc(o.lp.url)+'</span><span class="acc">'+esc(o.accName)+'</span>'
-        + '<span class="sum">消化'+yen(o.t.cost)+' ・ CTR'+o.t.ctr.toFixed(2)+'% ・ CV'
-        + (o.cvUnset?'未設定':o.t.cv)+(o.t.cpa?' ・ CPA'+yen(o.t.cpa):'')+'</span>'
-        + '<button class="go" data-key="'+esc(o.key)+'">このLPを分析する</button></div>'
-        + (reports[o.key] ? '<div class="rep"><h3>分析（'+a+' 〜 '+b+'）</h3><pre>'+esc(reports[o.key])+'</pre>'
-            + '<div class="act"><button class="btn" data-copy="'+esc(o.key)+'">コピー</button>'
-            + '<button class="btn" data-close="'+esc(o.key)+'">閉じる</button></div></div>' : '')
-        + '<div class="grid">'+o.lp.ads.map(ad=>card(ad,o.t)).join('')+'</div></section>').join('')
-      : '<p class="note">この期間に表示できるバナーがありません。</p>')
-    + (show < total ? '<p style="margin-top:22px"><button class="btn" id="more">'
-        + 'つづきを表示（あと'+(total-show)+'本）</button></p>' : '')
-    + '<p class="note">「効いている」はLP平均CPAより安く獲得できた枚。'
+    + '<div id="lps"></div>'
+    + (total===0 ? '<p class="note">この期間に表示できるバナーがありません。</p>' : '')
+    + '<p id="foot" class="note">「効いている」はLP平均CPAより安く獲得できた枚。'
     + '「クリックは取れているがCV0」は平均以上のCTRでクリックを集めながら獲得ゼロの枚。'
     + '消化がLPの8%未満、またはクリック30未満の枚は判断材料が足りないので判定しません。</p>';
+  document.getElementById('app').hidden = false;
+  document.getElementById('gate').hidden = true;
+  const e0 = document.getElementById('err'); if (e0) e0.textContent = '';
 
-  const more = document.getElementById('more');
-  if (more) more.addEventListener('click', () => { show += 12; render(); });
-  document.querySelectorAll('.seg button').forEach(bn => bn.addEventListener('click', () => {
-    days = +bn.dataset.days; from = to = null; reports = {}; show = 12; render();
-  }));
-  document.getElementById('f').addEventListener('change', e => { from = e.target.value; to = to || b; reports={}; render(); });
-  document.getElementById('t').addEventListener('change', e => { to = e.target.value; from = from || a; reports={}; render(); });
-  document.getElementById('acc').addEventListener('change', e => { acc = e.target.value; render(); });
-  document.getElementById('only').addEventListener('click', () => { only = !only; render(); });
+  const box = document.getElementById('lps');
+  let drawn = 0;
+  const token = ++renderToken;
+  (function step(){
+    if (token !== renderToken) return;            // 条件が変わったら前の描画は捨てる
+    if (drawn >= shown.length){
+      if (show < total){
+        const p = document.createElement('p');
+        p.style.marginTop = '22px';
+        p.innerHTML = '<button class="btn" id="more">つづきを表示（あと'+(total-show)+'本）</button>';
+        box.appendChild(p);
+        p.querySelector('#more').addEventListener('click', () => { show += 6; render(); });
+      }
+      bind();
+      return;
+    }
+    const o = shown[drawn++];
+    const sec = document.createElement('section');
+    sec.className = 'lp';
+    sec.innerHTML = '<div class="lphead">'
+      + '<span class="u">'+esc(o.lp.url)+'</span><span class="acc">'+esc(o.accName)+'</span>'
+      + '<span class="sum">消化'+yen(o.t.cost)+' ・ CTR'+o.t.ctr.toFixed(2)+'% ・ CV'
+      + (o.cvUnset?'未設定':o.t.cv)+(o.t.cpa?' ・ CPA'+yen(o.t.cpa):'')+'</span>'
+      + '<button class="go" data-key="'+esc(o.key)+'">このLPを分析する</button></div>'
+      + (reports[o.key] ? '<div class="rep"><h3>分析（'+a+' 〜 '+b+'）</h3><pre>'+esc(reports[o.key])+'</pre>'
+          + '<div class="act"><button class="btn" data-copy="'+esc(o.key)+'">コピー</button>'
+          + '<button class="btn" data-close="'+esc(o.key)+'">閉じる</button></div></div>' : '')
+      + '<div class="grid">'+o.lp.ads.map(ad=>card(ad,o.t)).join('')+'</div>';
+    box.appendChild(sec);
+    document.getElementById('cnt').textContent = 'LP '+total+'本（'+drawn+'本を表示中）';
+    requestAnimationFrame(step);
+  })();
+
+  function bind(){
   document.querySelectorAll('.go').forEach(bn => bn.addEventListener('click', () => {
     const o = shown.find(x => x.key === bn.dataset.key);
     reports[bn.dataset.key] = analyze(o.lp, o.accName);
@@ -249,6 +267,18 @@ function render(){
   document.querySelectorAll('[data-close]').forEach(bn => bn.addEventListener('click', () => {
     delete reports[bn.dataset.close]; render();
   }));
+  }
+  bindBar();
+
+  function bindBar(){
+    document.querySelectorAll('.seg button').forEach(bn => bn.addEventListener('click', () => {
+      days = +bn.dataset.days; from = to = null; reports = {}; show = 6; render();
+    }));
+    document.getElementById('f').addEventListener('change', e => { from = e.target.value; to = to || b; reports={}; show=6; render(); });
+    document.getElementById('t').addEventListener('change', e => { to = e.target.value; from = from || a; reports={}; show=6; render(); });
+    document.getElementById('acc').addEventListener('change', e => { acc = e.target.value; show=6; render(); });
+    document.getElementById('only').addEventListener('click', () => { only = !only; show=6; render(); });
+  }
 }
 
 async function tryOpen(){
