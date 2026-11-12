@@ -22,7 +22,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install --quiet cryptography
+      - run: pip install --quiet cryptography pillow
       - name: 実績を取って画面を作る
         env:
           META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}

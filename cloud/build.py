@@ -34,6 +34,20 @@ def encrypt(payload, password):
     return {"salt": b64(salt), "iv": b64(iv), "data": b64(ct), "iter": 250000}
 
 
+def thumb_data_uri(path, px=260, quality=70):
+    """バナーを画面に埋め込める形にする。並べて見比べられる大きさで。"""
+    try:
+        from PIL import Image
+        import io as _io
+        im = Image.open(path).convert("RGB")
+        im.thumbnail((px, px), Image.LANCZOS)
+        b = _io.BytesIO()
+        im.save(b, "JPEG", quality=quality, optimize=True)
+        return "data:image/jpeg;base64," + base64.b64encode(b.getvalue()).decode()
+    except Exception:
+        return ""
+
+
 def collect(tok, since, until, min_spend):
     accounts, out = M.paged("me/adaccounts",
         {"fields": "id,name,insights.date_preset(last_7d){spend}"}, tok), []
@@ -46,7 +60,7 @@ def collect(tok, since, until, min_spend):
         print(f"- {a['id']}", flush=True)
         import types
         args = types.SimpleNamespace(account=a["id"], since=since, until=until,
-                                     cv_action=None, no_images=True, spent_only=True,
+                                     cv_action=None, no_images=False, spent_only=True,
                                      out=os.path.join("/tmp/meta", a["id"]))
         hidden = io.StringIO()
         try:
@@ -70,12 +84,30 @@ def collect(tok, since, until, min_spend):
             d["n"] += 1
             d["ads"].append({"name": r["広告名"], "set": r["広告セット"], "cost": r["消化"],
                              "cv": 0 if r.get("CV未設定") else (r["CV"] or 0),
-                             "ctr": r.get("CTR"), "link": r.get("管理画面", "")})
+                             "ctr": r.get("CTR"), "imp": r.get("表示") or 0,
+                             "click": r.get("クリック") or 0,
+                             "link": r.get("管理画面", ""),
+                             "img": thumb_data_uri(r.get("画像") or "")})
         lps = []
         for u, d in sorted(bylp.items(), key=lambda kv: -kv[1]["cost"]):
-            d["ads"].sort(key=lambda x: (-(x["cv"] or 0), -x["cost"]))
+            merged = collections.OrderedDict()
+            for ad in d["ads"]:
+                m = merged.setdefault(ad["name"], {"name": ad["name"], "sets": [], "cost": 0.0,
+                                                   "cv": 0.0, "imp": 0.0, "click": 0.0,
+                                                   "img": "", "link": ad["link"]})
+                m["cost"] += ad["cost"]
+                m["cv"] += ad["cv"]
+                m["imp"] += ad["imp"]
+                m["click"] += ad["click"]
+                m["img"] = m["img"] or ad["img"]
+                if ad["set"] and ad["set"] not in m["sets"]:
+                    m["sets"].append(ad["set"])
+            ads = sorted(merged.values(), key=lambda x: (-(x["cv"] or 0), -x["cost"]))
+            if d["cost"] < 10000:          # 消化の小さいLPは画像を載せない（重くなるため）
+                for ad in ads:
+                    ad["img"] = ""
             lps.append({"url": u, **{k: d[k] for k in ("cost", "cv", "imp", "click", "n")},
-                        "ads": d["ads"][:12]})
+                        "ads": ads[:8]})
         out.append({
             "id": a["id"], "name": a.get("name", ""), "error": "",
             "cost": sum(r["消化"] for r in rows),
