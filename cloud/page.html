@@ -101,6 +101,14 @@ function lpMatchAvg(lp){
   const r = lp.ads.map(ad => ad.match && ad.match.rate).filter(v => typeof v === 'number');
   return r.length ? r.reduce((x,y)=>x+y,0)/r.length : null;
 }
+function imgGap(ad, lp){
+  /* バナー画像の中の文言がLPに出てこないか。他の枚と比べて明らかに低いものだけ。 */
+  const r = lp.ads.map(x => x.imgMatch && x.imgMatch.rate).filter(v => typeof v === 'number');
+  if (!ad.imgMatch || r.length < 2) return null;
+  const avg = r.reduce((x,y)=>x+y,0)/r.length;
+  if (ad.imgMatch.rate >= avg * 0.8 || ad.imgMatch.rate >= 0.7) return null;
+  return {rate: ad.imgMatch.rate, avg, missing: (ad.imgMatch.missing||[]).slice(0,3)};
+}
 function copyGap(ad, lp){
   /* 同じLPに出している他のバナーと比べて、明らかに噛み合っていないものだけ拾う。
      広告文とLP本文は元々言い回しが違うので、絶対値では判定しない。 */
@@ -117,7 +125,7 @@ function lpTotals(lp, a, b){
 }
 function judge(s, t, ad, lp){
   const share = t.cost ? s.cost/t.cost : 0;
-  const gap = (ad && lp) ? copyGap(ad, lp) : null;
+  const gap = (ad && lp) ? (imgGap(ad, lp) || copyGap(ad, lp)) : null;
   if (s.cv > 0 && t.cpa && s.cpa <= t.cpa) return ['ok','効いている'];
   if (s.cv > 0) return ['mid','獲得はあるが平均より高い'];
   if (share < 0.08 || s.click < 30) return ['mute','配信が少なく判断できない'];
@@ -149,9 +157,11 @@ function analyze(lp, accName){
     L.push('■ 効いているバナー');
     for (const x of win){
       L.push(`・${x.ad.name}：CPA ${yen(x.s.cpa)}（CV ${x.s.cv}件 / 消化 ${yen(x.s.cost)} / CTR ${x.s.ctr.toFixed(2)}%）`);
+      if (x.ad.imgText && x.ad.imgText.length)
+        L.push(`　 バナーの文言：${x.ad.imgText.slice(0,3).map(v=>'「'+v+'」').join('')}`);
       const tt = (x.ad.texts && x.ad.texts.title && x.ad.texts.title[0]) || '';
       if (tt) L.push(`　 広告の見出し：「${tt}」`);
-      if (x.ad.match) L.push(`　 LPとの一致 ${Math.round(x.ad.match.rate*100)}%`);
+      if (x.ad.imgMatch) L.push(`　 バナーの文言とLPの一致 ${Math.round(x.ad.imgMatch.rate*100)}%`);
     }
   } else if (t.cv === 0) {
     L.push('■ この期間、獲得はゼロです。');
@@ -164,6 +174,8 @@ function analyze(lp, accName){
     for (const x of bad){
       const hi = x.s.ctr >= t.ctr, g = copyGap(x.ad, lp);
       L.push(`・${x.ad.name}：消化 ${yen(x.s.cost)} / CTR ${x.s.ctr.toFixed(2)}%（全体 ${t.ctr.toFixed(2)}%）/ CV 0件`);
+      if (x.ad.imgText && x.ad.imgText.length)
+        L.push(`　 バナーの文言：${x.ad.imgText.slice(0,3).map(v=>'「'+v+'」').join('')}`);
       const tt = (x.ad.texts && x.ad.texts.title && x.ad.texts.title[0]) || '';
       if (tt) L.push(`　 広告の見出し：「${tt}」`);
       if (hi && g){
@@ -194,17 +206,26 @@ function analyze(lp, accName){
     L.push(`■ 判断できないバナー（配信が少ない）：${thin.map(x=>x.ad.name).join('、')}`);
     L.push('');
   }
-  const anyMatch = rows.some(x=>x.ad.match);
+  if (lp.cands && lp.cands.length){
+    L.push('■ 次の訴求の材料（LP本文に実在する数字だけ）');
+    for (const c of lp.cands.slice(0,4)){
+      L.push(`・${(c.src?'【出典あり】':'')}${(c.unused?'【未使用】':'')}${c.nums.join(' / ')} — ${c.line}`);
+      if (c.note) L.push(`　 近くの注記：${c.note}`);
+    }
+    L.push('　 ここに出ていない数字はバナーに載せない。クリック後に裏づけが無くなります。');
+    L.push('');
+  }
+  const anyMatch = rows.some(x=>x.ad.match || x.ad.imgMatch);
   if (!anyMatch) L.push('※ このLPは本文が短く、広告文との照合ができていません。');
   L.push('※ この文章は数字と、広告テキストとLP本文の照合から機械的に作っています。');
-  L.push('※ 照合しているのは広告のテキストで、バナー画像の中の文字は見ていません。');
+  L.push('※ バナー画像の文字はOCRで読んでいます。記号や崩し字は誤読することがあります。');
   return L.join('\n');
 }
 
 function card(ad, t, lp){
   const [a,b] = range(); const s = sum(ad,a,b);
   const [cls, label] = judge(s,t,ad,lp);
-  const gap = lp ? copyGap(ad, lp) : null;
+  const gap = lp ? (imgGap(ad, lp) || copyGap(ad, lp)) : null;
   return '<div class="b '+(cls==='ok'?'win':(cls==='bad'?'lose':''))+'">'
     + (ad.img ? '<img src="'+ad.img+'" alt="'+esc(ad.name)+'" loading="lazy">' : '<div class="noimg">画像なし</div>')
     + '<div class="body"><div class="nm">'+esc(ad.name)+'</div>'
@@ -212,14 +233,19 @@ function card(ad, t, lp){
     + '<dt>CTR</dt><dd>'+(s.imp?s.ctr.toFixed(2)+'%':'—')+'</dd>'
     + '<dt>CV</dt><dd>'+s.cv+'</dd>'
     + '<dt>CPA</dt><dd>'+(s.cpa?yen(s.cpa):'—')+'</dd></dl>'
+    + ((ad.imgText && ad.imgText.length)
+        ? '<div class="copy">バナー：'+esc(ad.imgText.slice(0,2).join(' / '))+'</div>' : '')
     + ((ad.texts && ad.texts.title && ad.texts.title.length)
         ? '<div class="copy">'+esc(ad.texts.title[0])
           + (ad.texts.title.length>1 ? ' ほか'+(ad.texts.title.length-1)+'本' : '')+'</div>' : '')
-    + (ad.match ? '<div class="copy">LPとの一致 '+Math.round(ad.match.rate*100)+'%'
-        + (gap ? '（このLPの平均 '+Math.round(gap.avg*100)+'%）' : '')+'</div>' : '')
+    + (ad.imgMatch ? '<div class="copy">バナーの文言とLPの一致 '+Math.round(ad.imgMatch.rate*100)+'%'
+        + (gap ? '（このLPの平均 '+Math.round(gap.avg*100)+'%）' : '')+'</div>'
+       : (ad.match ? '<div class="copy">広告文とLPの一致 '+Math.round(ad.match.rate*100)+'%</div>' : ''))
     + '<span class="tag '+cls+'">'+label+'</span>'
     + (gap && gap.missing.length
         ? '<span class="tag bad">LPに無い：'+esc(gap.missing[0])+'</span>' : '')
+    + ((ad.small && ad.small.length)
+        ? '<span class="tag mid">390pxで読みにくい字あり</span>' : '')
     + (ad.sets && ad.sets.length>1 ? '<span class="tag mute">'+ad.sets.length+'つの広告セットに同じ絵</span>' : '')
     + (ad.link ? '<a href="'+esc(ad.link)+'" target="_blank" rel="noopener">管理画面で見る</a>' : '')
     + '</div></div>';

@@ -4,3 +4,4 @@ __pycache__/
 .meta_token
 out/
 .claude/
+tools/jpocr

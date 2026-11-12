@@ -126,6 +126,67 @@ def match_copy(texts, lp_lines):
             "missing": [r["text"] for r in rows if r["rate"] < 0.35][:3]}
 
 
+OCR_BIN = os.path.join(HERE, "..", "tools", "jpocr")
+NUM = re.compile(r"[0-9][0-9,\.]*\s*(?:円|万円|億円|%|倍|割|kWh|kW|年|ヶ月|か月|日|人|件|名|回|分|坪|畳)")
+SRC_HINT = re.compile(r"(出典|参考|調査|公表|統計|資源エネルギー庁|経済産業省|総務省|国土交通省|環境省|国民生活センター|協会|※)")
+
+
+def ocr_images(paths):
+    """バナー画像の中の文字を読む（macOS標準のOCR）。Linuxでは動かない。"""
+    paths = [p for p in dict.fromkeys(paths) if p and os.path.exists(p)]
+    if not paths or not os.path.exists(OCR_BIN):
+        return {}
+    out = {}
+    for i in range(0, len(paths), 40):
+        chunk = paths[i:i + 40]
+        try:
+            r = subprocess.run([OCR_BIN] + chunk, capture_output=True, text=True, timeout=600)
+        except Exception:
+            continue
+        for row in (r.stdout or "").strip().splitlines():
+            try:
+                d = json.loads(row)
+            except Exception:
+                continue
+            if d.get("error"):
+                continue
+            lines = [l for l in d.get("lines", []) if l.get("conf", 0) >= 0.3 and l.get("text", "").strip()]
+            out[d["path"]] = lines
+    return out
+
+
+def banner_copy(lines):
+    """OCRの行から、バナーが言っている主な文言だけ取る（注記や小さい字は外す）。"""
+    big = [l for l in lines if l["h"] >= 0.04 and len(l["text"].strip()) >= 3
+           and not l["text"].lstrip().startswith(("※", "*", "＊"))]
+    big.sort(key=lambda l: l["y"])
+    return [l["text"].strip() for l in big][:8]
+
+
+def lp_candidates(lines, used_text):
+    """次の訴求の材料。LP本文に実在する数字の行を、出典つき・未使用を上にして返す。"""
+    used = norm(used_text)
+    out, seen = [], set()
+    for i, l in enumerate(lines):
+        nums = [m.group(0).strip() for m in NUM.finditer(l)]
+        if not nums or l in seen:
+            continue
+        seen.add(l)
+        note = ""
+        if l.lstrip().startswith(("※", "*", "＊")):
+            note = l
+        else:
+            for j in range(i + 1, min(i + 4, len(lines))):
+                if lines[j].lstrip().startswith(("※", "*", "＊")) or SRC_HINT.search(lines[j]):
+                    note = lines[j]
+                    break
+        out.append({"nums": list(dict.fromkeys(nums))[:4], "line": l[:110], "note": note[:120],
+                    "src": bool(SRC_HINT.search(l) or SRC_HINT.search(note)),
+                    "unused": not any(norm(n) in used for n in nums)})
+    out.sort(key=lambda c: -((3 if c["src"] else 0) + (2 if c["unused"] else 0)))
+    return out[:6]
+
+
 def thumb_data_uri(path, px=200, quality=62):
     """バナーを画面に埋め込める形にする。並べて見比べられる大きさで。"""
     try:
@@ -197,10 +258,12 @@ def collect(tok, since, until, min_spend):
                 m["cost"] = sum(v[0] for v in m["d"].values())
             items.sort(key=lambda m: -m["cost"])
             for i, m in enumerate(items[:8]):
+                m["imgPath"] = m["img"] if tot >= 10000 else ""
                 m["img"] = thumb_data_uri(m["img"]) if (tot >= 10000 and i < 6) else ""
             lps.append({"url": u, "cost": tot,
                         "ads": [{"name": m["name"], "sets": m["sets"], "link": m["link"],
-                                 "img": m["img"], "texts": m.get("texts") or {},
+                                 "img": m["img"], "imgPath": m.get("imgPath", ""),
+                                 "texts": m.get("texts") or {},
                                  "d": {k: [round(v[0]), int(v[1]), int(v[2]), int(v[3])]
                                        for k, v in sorted(m["d"].items())}}
                                 for m in items[:8]]})
@@ -234,17 +297,48 @@ def add_lp_match(accounts, workers=5):
     thin = sum(1 for u in urls if len(texts.get(u) or []) < 25)
     print(f"  取れた {sum(1 for u in urls if texts.get(u))}本 / 本文が短く照合できない {thin}本", flush=True)
 
+    # バナー画像の文字を読む（これがアームズでやった照合の中身）
+    paths = [ad["imgPath"] for a in accounts for l in a["lps"] for ad in l["ads"] if ad.get("imgPath")]
+    print(f"バナーの文字を読み取り中… {len(set(paths))}枚", flush=True)
+    ocr = ocr_images(paths)
+    print(f"  読めた {len(ocr)}枚", flush=True)
+
     for a in accounts:
         for l in a["lps"]:
             lines = texts.get(l["url"]) or []
             l["lpLines"] = len(lines)
             l["lpThin"] = len(lines) < 25 or len("".join(lines)) < 400
-            if l["lpThin"]:
-                continue
+            hay = norm(" ".join(lines))
+            used = []
             for ad in l["ads"]:
+                oc = ocr.get(ad.get("imgPath") or "")
+                if oc:
+                    ad["imgText"] = banner_copy(oc)
+                    ad["small"] = [x["text"] for x in oc
+                                   if x["h"] * 390 < 11 and x["h"] >= 0.03][:3]
+                    used += ad["imgText"]
+                if l["lpThin"] or not hay:
+                    continue
                 m = match_copy(ad.get("texts") or {}, lines)
                 if m:
                     ad["match"] = m
+                if ad.get("imgText"):
+                    rows = []
+                    for t in ad["imgText"]:
+                        n = norm(t)
+                        if len(n) < 4:
+                            continue
+                        hit = longest_common(n, hay)
+                        rows.append({"text": t[:40], "rate": round(len(hit) / len(n), 2)})
+                    if rows:
+                        ad["imgMatch"] = {
+                            "rate": round(sum(r["rate"] for r in rows) / len(rows), 2),
+                            "rows": rows[:6],
+                            "missing": [r["text"] for r in rows if r["rate"] < 0.4][:3]}
+            if not l["lpThin"] and lines:
+                l["cands"] = lp_candidates(lines, " ".join(used) + " " +
+                                           " ".join(t for ad in l["ads"]
+                                                    for t in (ad.get("texts") or {}).get("title", [])))
 
 
 def main():
@@ -265,6 +359,11 @@ def main():
     since = until - dt.timedelta(days=a.days - 1)
     accounts = collect(tok, str(since), str(until), a.min_spend)
     add_lp_match(accounts)
+
+    for a0 in accounts:
+        for l0 in a0["lps"]:
+            for ad0 in l0["ads"]:
+                ad0.pop("imgPath", None)
 
     payload = {"since": str(since), "until": str(until), "period": f"{since}〜{until}",
                "ranAt": dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),

@@ -16,13 +16,18 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # macOS を使うのは、バナー画像の文字を読むOCRが macOS 標準の機能だから。
+    # 公開リポジトリなので macOS ランナーも無料で使える。
+    runs-on: macos-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: pip install --quiet cryptography pillow
+      - name: OCRをビルドする
+        run: swiftc -O -o tools/jpocr tools/jpocr.swift
       - name: 実績を取って画面を作る
         env:
           META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
