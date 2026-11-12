@@ -147,7 +147,11 @@ def pick_cv(actions, prefer=None):
 
 
 def lp_url(creative):
-    """クリエイティブの飛び先LPを取り出す。置き場所が何通りかある。"""
+    """クリエイティブの飛び先LPを取り出す。置き場所が何通りかある。
+
+    カルーセルは link_data.link が空で、カード（child_attachments）ごとに
+    リンクが入っている。カードが別々のLPを指すこともあるので、一番多いものを採る。
+    """
     if not creative:
         return ""
     spec = creative.get("object_story_spec") or {}
@@ -160,6 +164,12 @@ def lp_url(creative):
         cta = (d.get("call_to_action") or {}).get("value") or {}
         if isinstance(cta.get("link"), str) and cta["link"].startswith("http"):
             return cta["link"]
+        # カルーセル
+        links = [c.get("link") for c in (d.get("child_attachments") or [])
+                 if isinstance(c.get("link"), str) and c["link"].startswith("http")]
+        if links:
+            from collections import Counter
+            return Counter(strip_params(l) for l in links).most_common(1)[0][0]
     afs = creative.get("asset_feed_spec") or {}
     for u in (afs.get("link_urls") or []):
         for f in ("website_url", "display_url"):
@@ -180,6 +190,11 @@ def image_hashes(creative):
         d = spec.get(key) or {}
         if d.get("image_hash"):
             out.append(d["image_hash"])
+    for key in ("link_data", "video_data", "template_data"):
+        d = spec.get(key) or {}
+        for c in (d.get("child_attachments") or []):   # カルーセルのカード
+            if c.get("image_hash"):
+                out.append(c["image_hash"])
     afs = creative.get("asset_feed_spec") or {}
     for im in (afs.get("images") or []):
         if im.get("hash"):
