@@ -27,7 +27,7 @@ jobs:
         env:
           META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
           VIEW_PASSWORD: ${{ secrets.VIEW_PASSWORD }}
-          META_CV_JSON: ${{ secrets.META_CV_JSON }}
+          META_CV_CONFIG: config/meta_cv.json
         run: python3 cloud/build.py --days 28 --out docs
       - uses: actions/upload-pages-artifact@v3
         with:

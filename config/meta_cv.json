@@ -1,0 +1,69 @@
+{
+  "act_1036446683722851": {
+    "actions": []
+  },
+  "act_1232203784150718": {
+    "actions": []
+  },
+  "act_1435574941379314": {
+    "actions": [
+      "lead"
+    ]
+  },
+  "act_1651124336593447": {
+    "actions": [
+      "offsite_conversion.custom.1614591866252237"
+    ]
+  },
+  "act_1723388841155876": {
+    "actions": []
+  },
+  "act_1790909845266746": {
+    "actions": [
+      "offsite_conversion.custom.1770080537621215"
+    ]
+  },
+  "act_1867119730935673": {
+    "actions": []
+  },
+  "act_2886681881466727": {
+    "actions": [
+      "offsite_conversion.custom.3439553019550379",
+      "offsite_conversion.custom.1722415282144238"
+    ]
+  },
+  "act_300729126300019": {
+    "actions": []
+  },
+  "act_455331315756717": {
+    "actions": []
+  },
+  "act_506082805025056": {
+    "actions": [
+      "lead"
+    ]
+  },
+  "act_603402567736525": {
+    "actions": [
+      "offsite_conversion.custom.666038299365815"
+    ]
+  },
+  "act_683502719839199": {
+    "actions": [
+      "offsite_conversion.custom.941854055159502"
+    ]
+  },
+  "act_741886003769052": {
+    "actions": []
+  },
+  "act_918266306636157": {
+    "actions": [
+      "offsite_conversion.custom.707133634780058"
+    ]
+  },
+  "act_970150596935059": {
+    "actions": [
+      "lead"
+    ]
+  }
+}
