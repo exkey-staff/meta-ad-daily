@@ -306,7 +306,18 @@ CV_OVERRIDE = os.environ.get("META_CV_CONFIG") or os.path.expanduser("~/.config/
 
 
 def load_overrides():
-    """アカウントごとに「何をCVと数えるか」を人が決めた設定。"""
+    """アカウントごとに「何をCVと数えるか」を人が決めた設定。
+
+    クライアント名が入るので、クラウドで回すときはファイルではなく
+    環境変数 META_CV_JSON（＝GitHubのシークレット）から読む。
+    """
+    raw = os.environ.get("META_CV_JSON", "").strip()
+    if raw:
+        try:
+            return json.loads(raw)
+        except Exception:
+            print("! META_CV_JSON が読めない（JSONの形を確認する）", file=sys.stderr)
+            return {}
     try:
         with open(CV_OVERRIDE, encoding="utf-8") as f:
             return json.load(f)
