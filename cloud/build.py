@@ -219,9 +219,11 @@ def collect(tok, since, until, min_spend):
         try:
             with contextlib.redirect_stdout(hidden):
                 rows = M.cmd_insights(args)
-        except SystemExit as e:
-            print("   ! 取得できず", flush=True)
-            out.append({"id": a["id"], "name": a.get("name", ""), "error": str(e)[:160],
+        except (SystemExit, Exception) as e:
+            # 1アカウントで落ちても全体を止めない。画面にその旨を出す
+            msg = f"{type(e).__name__}: {e}"
+            print(f"   ! 取得できず（{type(e).__name__}）", flush=True)
+            out.append({"id": a["id"], "name": a.get("name", ""), "error": msg[:160],
                         "cost": 0, "cv": 0, "cvUnset": True, "lps": []})
             continue
         rows = [r for r in rows if (r.get("消化") or 0) > 0]
@@ -297,8 +299,13 @@ def add_lp_match(accounts, workers=5):
         return
     print(f"\nLPの本文を取得中… {len(urls)}本", flush=True)
     texts = {}
+    def safe_fetch(u):
+        try:
+            return fetch_lp_text(u)
+        except Exception:
+            return []
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        for u, lines in zip(urls, ex.map(fetch_lp_text, urls)):
+        for u, lines in zip(urls, ex.map(safe_fetch, urls)):
             texts[u] = lines
     thin = sum(1 for u in urls if len(texts.get(u) or []) < 25)
     print(f"  取れた {sum(1 for u in urls if texts.get(u))}本 / 本文が短く照合できない {thin}本", flush=True)

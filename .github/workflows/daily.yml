@@ -39,6 +39,8 @@ jobs:
           VIEW_PASSWORD: ${{ secrets.VIEW_PASSWORD }}
           META_CV_CONFIG: config/meta_cv.json
         run: python3 cloud/build.py --days 28 --out docs
+      - name: 画面ができたか確かめる
+        run: test -s docs/index.html && test -s docs/light.html
       - uses: actions/upload-pages-artifact@v3
         with:
           path: docs
