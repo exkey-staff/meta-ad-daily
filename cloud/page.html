@@ -34,6 +34,7 @@ select,input[type=date],.btn{font:500 .82rem var(--sans);background:var(--card);
 .lphead .go{margin-left:auto}
 .go{border:1px solid var(--mark);background:var(--mark);color:#fff;border-radius:999px;
  padding:6px 14px;font:700 .8rem var(--sans);cursor:pointer;white-space:nowrap}
+.go.hand{background:var(--accent);border-color:var(--accent);margin-left:6px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(186px,1fr));gap:13px;margin-top:13px}
 .b{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden;display:flex;flex-direction:column}
 .b.win{border-color:var(--ok);box-shadow:0 0 0 1px var(--ok) inset}
@@ -278,6 +279,30 @@ function analyze(lp, accName){
   return L.join('\n');
 }
 
+/* Claudeに渡す用。画面に無い情報（内訳など）は「自分で取れ」と書いておく */
+function brief(lp, accName, accId){
+  const [a,b] = range();
+  const L = [];
+  L.push('meta-banner-analysis スキルを使って、下のバナーを分析してください。');
+  L.push('');
+  L.push(`広告アカウント：${accName}（${accId}）`);
+  L.push(`飛び先LP：${lp.url}`);
+  L.push(`期間：${a} 〜 ${b}` + (hideOff ? '（停止中のバナーは除いています）' : ''));
+  L.push('');
+  L.push('--- 画面が出している分析（機械的に作ったもの） ---');
+  L.push(analyze(lp, accName));
+  L.push('');
+  L.push('--- この画面に無いので、必要なら自分で取ってください ---');
+  L.push('・プレースメント別の内訳（Audience Network が混ざっていないか。費用とクリックの出どころ）');
+  L.push('・デバイス別・地域別・年齢性別の内訳');
+  L.push('・広告セットとキャンペーンの構成（同じ絵が複数セットに入っていないか、複製キャンペーンが無いか）');
+  L.push('・このLPのCVが本当に計測されているか（カスタムコンバージョンの存在と、実際の発火）');
+  L.push('・動画の中の文字（この画面はサムネイルしか読んでいません）');
+  L.push('');
+  L.push('Metaのトークンは ~/.meta_token、道具は ~/skills/tools/banner_insight/ にあります。');
+  return L.join('\n');
+}
+
 function card(ad, t, lp){
   const [a,b] = range(); const s = sum(ad,a,b);
   const [cls, label] = judge(s,t,ad,lp);
@@ -373,7 +398,8 @@ function render(){
       + '<span class="u">'+esc(o.lp.url)+'</span><span class="acc">'+esc(o.accName)+'</span>'
       + '<span class="sum">消化'+yen(o.t.cost)+' ・ CTR'+o.t.ctr.toFixed(2)+'% ・ CV'
       + (o.cvUnset?'未設定':o.t.cv)+(o.t.cpa?' ・ CPA'+yen(o.t.cpa):'')+'</span>'
-      + '<button class="go" data-key="'+esc(o.key)+'">このLPを分析する</button></div>'
+      + '<button class="go" data-key="'+esc(o.key)+'">このLPを分析する</button>'
+      + '<button class="go hand" data-brief="'+esc(o.key)+'">Claudeに渡す</button></div>'
       + (reports[o.key] ? '<div class="rep"><h3>分析（'+a+' 〜 '+b+'）</h3><pre>'+esc(reports[o.key])+'</pre>'
           + '<div class="act"><button class="btn" data-copy="'+esc(o.key)+'">コピー</button>'
           + '<button class="btn" data-close="'+esc(o.key)+'">閉じる</button></div></div>' : '')
@@ -384,10 +410,19 @@ function render(){
   })();
 
   function bind(){
-  document.querySelectorAll('.go').forEach(bn => bn.addEventListener('click', () => {
+  document.querySelectorAll('.go[data-key]').forEach(bn => bn.addEventListener('click', () => {
     const o = shown.find(x => x.key === bn.dataset.key);
     reports[bn.dataset.key] = analyze(o.lp, o.accName);
     render();
+  }));
+  document.querySelectorAll('.go[data-brief]').forEach(bn => bn.addEventListener('click', async () => {
+    const o = shown.find(x => x.key === bn.dataset.brief);
+    const txt = brief(o.lp, o.accName, (o.key||'').split('|')[0]);
+    try { await navigator.clipboard.writeText(txt); bn.textContent = 'コピーした'; }
+    catch(e){
+      // クリップボードが使えないときは、その場に出して選べるようにする
+      reports[bn.dataset.brief] = txt; render();
+    }
   }));
   document.querySelectorAll('[data-copy]').forEach(bn => bn.addEventListener('click', async () => {
     try { await navigator.clipboard.writeText(reports[bn.dataset.copy]); bn.textContent='コピーした'; }

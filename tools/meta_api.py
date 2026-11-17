@@ -497,6 +497,9 @@ def cmd_insights(args):
     tr = json.dumps({"since": args.since, "until": args.until})
     print(f"実績を取得中… {args.account} {args.since}〜{args.until}")
     q = {"level": "ad", "fields": INSIGHT_FIELDS}
+    if getattr(args, "breakdown", None):
+        # プレースメント別・デバイス別などの内訳。合計だけ見ると的を外すことがある
+        q["breakdowns"] = args.breakdown
     if getattr(args, "daily", False):
         q["time_increment"] = 1
     if args.spent_only:
@@ -593,6 +596,26 @@ def cmd_insights(args):
                      + args.account.replace("act_", "")
                      + "&selected_ad_ids=" + str(r.get("ad_id"))),
         })
+
+    if getattr(args, "breakdown", None):
+        keys = [k.strip() for k in args.breakdown.split(",")]
+        agg = {}
+        for r, src in zip(rows, ins):
+            k = tuple(str(src.get(x, "")) for x in keys)
+            d = agg.setdefault(k, {"消化": 0, "表示": 0, "クリック": 0, "CV": 0})
+            d["消化"] += r["消化"] or 0
+            d["表示"] += r["表示"] or 0
+            d["クリック"] += r["クリック"] or 0
+            d["CV"] += (r["CV"] or 0) if not r.get("CV未設定") else 0
+        tot = sum(d["消化"] for d in agg.values()) or 1
+        totc = sum(d["クリック"] for d in agg.values()) or 1
+        print(f"\n内訳（{args.breakdown}）")
+        print(f"{'':<42}{'消化':>12}{'費用%':>7}{'クリック':>9}{'ｸﾘｯｸ%':>7}{'CTR':>7}{'CV':>5}")
+        for k, d in sorted(agg.items(), key=lambda kv: -kv[1]["消化"]):
+            ctr = d["クリック"] / d["表示"] * 100 if d["表示"] else 0
+            print(f"{' / '.join(k)[:40]:<42}{d['消化']:>11,.0f}円{d['消化']/tot*100:>6.1f}%"
+                  f"{d['クリック']:>9,}{d['クリック']/totc*100:>6.1f}%{ctr:>6.2f}%{d['CV']:>5.0f}")
+        return rows
 
     rows.sort(key=lambda x: (x["LP"], -(x["消化"] or 0)))
 
@@ -786,6 +809,9 @@ def main():
             p.add_argument("--cv-action", help="CVとして数える action_type")
             p.add_argument("--no-images", action="store_true")
             p.add_argument("--spent-only", action="store_true", help="消化のある広告だけ")
+            p.add_argument("--breakdown",
+                           help="内訳（例: publisher_platform,platform_position / device_platform / "
+                                "age,gender / region）。付けると画面は作らず内訳を表に出す")
         p.set_defaults(func=fn)
 
     p = sub.add_parser("analyze", help="取った実績をLPごと・広告セットごとに割って気づきを立てる")
