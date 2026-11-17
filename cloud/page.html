@@ -166,46 +166,79 @@ function analyze(lp, accName){
   L.push(`全体：消化 ${yen(t.cost)} / 表示 ${t.imp.toLocaleString()} / クリック ${t.click.toLocaleString()}`
     + ` / CTR ${t.ctr.toFixed(2)}% / CV ${t.cv}件` + (t.cpa?` / CPA ${yen(t.cpa)}`:' / CPA —'));
   L.push('');
-  const win = rows.filter(x=>judge(x.s,t,x.ad,lp)[0]==='ok');
-  const bad = rows.filter(x=>judge(x.s,t,x.ad,lp)[0]==='bad');
-  const thin = rows.filter(x=>judge(x.s,t,x.ad,lp)[0]==='mute');
-  if (win.length){
-    L.push('■ 効いているバナー');
-    for (const x of win){
-      L.push(`・${x.ad.name}［${statusOf(x.ad)[1]}］：CPA ${yen(x.s.cpa)}（CV ${x.s.cv}件 / 消化 ${yen(x.s.cost)} / CTR ${x.s.ctr.toFixed(2)}%）`);
-      if (x.ad.imgText && x.ad.imgText.length)
-        L.push(`　 バナーの文言：${x.ad.imgText.slice(0,3).map(v=>'「'+v+'」').join('')}`);
-      const tt = (x.ad.texts && x.ad.texts.title && x.ad.texts.title[0]) || '';
-      if (tt) L.push(`　 広告の見出し：「${tt}」`);
-      if (x.ad.imgMatch) L.push(`　 バナーの文言とLPの一致 ${Math.round(x.ad.imgMatch.rate*100)}%`);
-    }
-  } else if (t.cv === 0) {
-    L.push('■ この期間、獲得はゼロです。');
-  } else {
-    L.push('■ 平均より安く獲得できたバナーはありません。');
+  const verdict = x => judge(x.s, t, x.ad, lp);
+  const got  = rows.filter(x => x.s.cv > 0);
+  const none = rows.filter(x => x.s.cv === 0);
+
+  /* まず全枚を出す。一番お金を使っている枚が報告から消えないように */
+  L.push('■ 全部のバナー（消化順）');
+  for (const x of rows){
+    const [, label] = verdict(x);
+    L.push(`・${x.ad.name}［${statusOf(x.ad)[1]}］ 消化 ${yen(x.s.cost)} / CTR ${x.s.ctr.toFixed(2)}%`
+      + ` / CV ${x.s.cv}件` + (x.s.cpa ? ` / CPA ${yen(x.s.cpa)}` : '') + ` → ${label}`);
+    if (x.ad.imgText && x.ad.imgText.length)
+      L.push(`　 バナーの文言：${x.ad.imgText.slice(0,3).map(v=>'「'+v+'」').join('')}`);
+    if (x.ad.imgMatch) L.push(`　 バナーの文言とLPの一致 ${Math.round(x.ad.imgMatch.rate*100)}%`);
   }
   L.push('');
+
+  /* 獲れている枚と獲れていない枚で、何が違うか */
+  if (got.length && none.length){
+    const avg = (a, f) => a.length ? a.reduce((s,x)=>s+f(x),0)/a.length : 0;
+    const sum2 = (a, f) => a.reduce((s,x)=>s+f(x),0);
+    L.push('■ 獲れている枚と獲れていない枚の違い');
+    L.push(`・獲れている ${got.length}枚：消化 ${yen(sum2(got,x=>x.s.cost))} / 平均CTR ${avg(got,x=>x.s.ctr).toFixed(2)}%`
+      + ` / CV ${sum2(got,x=>x.s.cv)}件`);
+    L.push(`・獲れていない ${none.length}枚：消化 ${yen(sum2(none,x=>x.s.cost))} / 平均CTR ${avg(none,x=>x.s.ctr).toFixed(2)}%`);
+
+    const mg = got.filter(x=>x.ad.imgMatch), mn = none.filter(x=>x.ad.imgMatch);
+    if (mg.length && mn.length){
+      const a1 = avg(mg,x=>x.ad.imgMatch.rate)*100, a2 = avg(mn,x=>x.ad.imgMatch.rate)*100;
+      L.push(`・LPとの一致：獲れている ${a1.toFixed(0)}% / 獲れていない ${a2.toFixed(0)}%`);
+      if (Math.abs(a1-a2) < 10) L.push('　 差が小さいので、ここでは勝ち負けの説明になりません。');
+    }
+
+    /* 文言の差。獲れている枚だけに出てくる言葉 */
+    const words = x => (x.ad.imgText||[]).join(' ').split(/[\s、。・！!？?「」／\/]+/)
+                        .filter(w => w.length >= 2);
+    const inGot = new Set(got.flatMap(words));
+    const inNone = new Set(none.flatMap(words));
+    const only = [...inGot].filter(w => !inNone.has(w)).slice(0,8);
+    const miss = [...inNone].filter(w => !inGot.has(w)).slice(0,8);
+    if (only.length) L.push(`・獲れている枚にだけ出てくる言葉：${only.map(w=>'「'+w+'」').join('')}`);
+    if (miss.length) L.push(`・獲れていない枚にだけ出てくる言葉：${miss.map(w=>'「'+w+'」').join('')}`);
+
+    const share = sum2(got,x=>x.s.cost) / (t.cost || 1);
+    if (share < 0.25)
+      L.push(`　 ただし獲れている枚に回っている予算は全体の${Math.round(share*100)}%しかありません。`
+        + '配信量が足りず、他の枚が本当に効かないのかはまだ分かりません。');
+    const cvTotal = sum2(got, x=>x.s.cv);
+    if (cvTotal < 10)
+      L.push(`　 CV合計が${cvTotal}件と少ないので、枚ごとのCPA差は配信量でも説明がつきます。`);
+    L.push('');
+  } else if (!got.length){
+    L.push('■ この期間、どの枚も獲得ゼロです。枚ごとの比較はできません。');
+    L.push('');
+  }
+
+  const bad = rows.filter(x=>verdict(x)[0]==='bad');
   if (bad.length){
-    L.push('■ 獲得できていないバナー');
+    L.push('■ 噛み合っていない可能性のある枚');
     for (const x of bad){
-      const hi = x.s.ctr >= t.ctr, g = copyGap(x.ad, lp);
-      L.push(`・${x.ad.name}［${statusOf(x.ad)[1]}］：消化 ${yen(x.s.cost)} / CTR ${x.s.ctr.toFixed(2)}%（全体 ${t.ctr.toFixed(2)}%）/ CV 0件`);
-      if (x.ad.imgText && x.ad.imgText.length)
-        L.push(`　 バナーの文言：${x.ad.imgText.slice(0,3).map(v=>'「'+v+'」').join('')}`);
-      const tt = (x.ad.texts && x.ad.texts.title && x.ad.texts.title[0]) || '';
-      if (tt) L.push(`　 広告の見出し：「${tt}」`);
+      const hi = x.s.ctr >= t.ctr, g = imgGap(x.ad, lp) || copyGap(x.ad, lp);
       if (hi && g){
-        L.push(`　 LPとの一致 ${Math.round(g.rate*100)}%（このLPの平均 ${Math.round(g.avg*100)}%）。他の枚より噛み合っていません。`);
+        L.push(`・${x.ad.name}：LPとの一致 ${Math.round(g.rate*100)}%（このLPの平均 ${Math.round(g.avg*100)}%）`);
         if (g.missing.length) L.push(`　 LPに出てこない文言：${g.missing.map(v=>'「'+v+'」').join('、')}`);
         L.push('　 クリックは平均以上に取れているので、言っていることがLPで受け止められていない可能性があります。');
       } else if (hi){
-        L.push('　 クリックは平均以上に取れているので、クリック後で落ちています。');
+        L.push(`・${x.ad.name}：CTRは平均以上（${x.s.ctr.toFixed(2)}%）なのにCV0。クリック後で落ちています。`);
       } else {
-        L.push('　 クリック自体が平均より取れていません。');
+        L.push(`・${x.ad.name}：CTR ${x.s.ctr.toFixed(2)}%（全体 ${t.ctr.toFixed(2)}%）。クリック自体が取れていません。`);
       }
     }
     L.push('');
   }
+
   /* 期間を半分に割って、前半と後半を比べる */
   const mid = new Date(new Date(a+'T00:00:00Z').getTime()
     + (new Date(b+'T00:00:00Z') - new Date(a+'T00:00:00Z'))/2).toISOString().slice(0,10);
@@ -218,10 +251,7 @@ function analyze(lp, accName){
     if (dc <= -20) L.push('　 CTRが2割以上落ちています。同じ絵を見続けられている可能性があります。');
     L.push('');
   }
-  if (thin.length){
-    L.push(`■ 判断できないバナー（配信が少ない）：${thin.map(x=>x.ad.name).join('、')}`);
-    L.push('');
-  }
+
   if (lp.cands && lp.cands.length){
     L.push('■ 次の訴求の材料（LP本文に実在する数字だけ）');
     for (const c of lp.cands.slice(0,4)){
