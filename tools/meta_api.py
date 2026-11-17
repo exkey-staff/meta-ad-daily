@@ -35,7 +35,12 @@ _version = None
 
 INSIGHT_FIELDS = ("ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,"
                   "spend,impressions,clicks,ctr,cpc,cpm,frequency,reach,"
-                  "actions,cost_per_action_type")
+                  "actions,cost_per_action_type,"
+                  # 動画は「最初の数秒で離脱していないか」で見方が変わる
+                  "video_play_actions,video_thruplay_watched_actions,"
+                  "video_avg_time_watched_actions,video_p25_watched_actions,"
+                  "video_p50_watched_actions,video_p75_watched_actions,"
+                  "video_p100_watched_actions")
 AD_FIELDS = ("id,name,status,effective_status,adset{id,name},campaign{id,name},"
              "creative{id,name,title,body,image_url,image_hash,thumbnail_url,object_story_spec,asset_feed_spec,"
              "effective_object_story_id,instagram_permalink_url}")
@@ -154,6 +159,41 @@ def paged(path, params, tok, limit_pages=50):
 
 CV_LIKE = ("offsite_conversion.", "lead", "onsite_conversion.lead",
            "complete_registration", "submit_application", "purchase", "contact")
+
+
+def _av(x):
+    """Metaの {action_type, value} 配列から数を1つ取り出す。"""
+    if isinstance(x, list):
+        for a in x:
+            try:
+                return float(a.get("value") or 0)
+            except Exception:
+                pass
+    return 0.0
+
+
+def video_stats(r):
+    """動画の見られ方。静止画なら None。
+
+    再生は始まっているのに最後まで見られていないのか、
+    そもそも再生されていないのかで、打ち手が変わる。
+    """
+    plays = _av(r.get("video_play_actions"))
+    if not plays:
+        return None
+    imp = float(r.get("impressions") or 0)
+    p100 = _av(r.get("video_p100_watched_actions"))
+    return {
+        "再生": int(plays),
+        "再生率": round(plays / imp * 100, 1) if imp else 0,
+        "ThruPlay": int(_av(r.get("video_thruplay_watched_actions"))),
+        "平均視聴秒": round(_av(r.get("video_avg_time_watched_actions")), 1),
+        "25%": int(_av(r.get("video_p25_watched_actions"))),
+        "50%": int(_av(r.get("video_p50_watched_actions"))),
+        "75%": int(_av(r.get("video_p75_watched_actions"))),
+        "100%": int(p100),
+        "完走率": round(p100 / plays * 100, 1) if plays else 0,
+    }
 
 
 def has_cv_event(actions):
@@ -548,6 +588,7 @@ def cmd_insights(args):
             "画像URL": next((hashmap[h] for h in image_hashes(cre) if h in hashmap),
                            image_url(cre)),
             "広告文": ad_texts(cre),
+            "動画": video_stats(r),
             "管理画面": ("https://adsmanager.facebook.com/adsmanager/manage/ads?act="
                      + args.account.replace("act_", "")
                      + "&selected_ad_ids=" + str(r.get("ad_id"))),

@@ -179,6 +179,16 @@ function analyze(lp, accName){
     if (x.ad.imgText && x.ad.imgText.length)
       L.push(`　 バナーの文言：${x.ad.imgText.slice(0,3).map(v=>'「'+v+'」').join('')}`);
     if (x.ad.imgMatch) L.push(`　 バナーの文言とLPの一致 ${Math.round(x.ad.imgMatch.rate*100)}%`);
+    if (x.ad.video){
+      const v = x.ad.video;
+      L.push(`　 動画：再生率 ${v['再生率']}% / 平均視聴 ${v['平均視聴秒']}秒 / 完走率 ${v['完走率']}%`
+        + `（25%まで ${v['25%']} → 50% ${v['50%']} → 75% ${v['75%']} → 最後まで ${v['100%']}）`);
+      if (v['完走率'] < 10 && v['再生'] > 100)
+        L.push('　 ほとんどが最後まで見られていません。言いたいことが後半にあるなら前に出す余地があります。');
+      if (v['再生率'] < 10 && v['再生'] > 0)
+        L.push('　 そもそも再生が始まっていません。1枚目の絵で止められています。');
+      L.push('　 ※ 動画の中の文字は読んでいません。サムネイルだけOCRしています。');
+    }
   }
   L.push('');
 
@@ -286,6 +296,8 @@ function card(ad, t, lp){
     + ((ad.texts && ad.texts.title && ad.texts.title.length)
         ? '<div class="copy">'+esc(ad.texts.title[0])
           + (ad.texts.title.length>1 ? ' ほか'+(ad.texts.title.length-1)+'本' : '')+'</div>' : '')
+    + (ad.video ? '<div class="copy">動画：再生'+ad.video['再生率']+'% / 平均'+ad.video['平均視聴秒']
+        +'秒 / 完走'+ad.video['完走率']+'%</div>' : '')
     + (ad.imgMatch ? '<div class="copy">バナーの文言とLPの一致 '+Math.round(ad.imgMatch.rate*100)+'%'
         + (gap ? '（このLPの平均 '+Math.round(gap.avg*100)+'%）' : '')+'</div>'
        : (ad.match ? '<div class="copy">広告文とLPの一致 '+Math.round(ad.match.rate*100)+'%</div>' : ''))

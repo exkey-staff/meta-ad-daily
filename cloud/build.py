@@ -234,7 +234,10 @@ def collect(tok, since, until, min_spend):
             key = (lp, r["広告名"])
             m = ads.setdefault(key, {"lp": lp, "name": r["広告名"], "sets": [], "img": "",
                                      "link": r.get("管理画面", ""), "d": {}, "st": set(),
-                                     "texts": r.get("広告文") or {}})
+                                     "texts": r.get("広告文") or {},
+                                     "video": r.get("動画")})
+            if r.get("動画") and not m.get("video"):
+                m["video"] = r["動画"]
             if r.get("状態"):
                 m["st"].add(r["状態"])
             if not m.get("texts", {}).get("title") and (r.get("広告文") or {}).get("title"):
@@ -265,7 +268,7 @@ def collect(tok, since, until, min_spend):
             lps.append({"url": u, "cost": tot,
                         "ads": [{"name": m["name"], "sets": m["sets"], "link": m["link"],
                                  "img": m["img"], "imgPath": m.get("imgPath", ""),
-                                 "st": sorted(m.get("st") or []),
+                                 "st": sorted(m.get("st") or []), "video": m.get("video"),
                                  "texts": m.get("texts") or {},
                                  "d": {k: [round(v[0]), int(v[1]), int(v[2]), int(v[3])]
                                        for k, v in sorted(m["d"].items())}}
