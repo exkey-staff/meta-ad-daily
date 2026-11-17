@@ -3,7 +3,12 @@ name: 毎朝の取得
 on:
   schedule:
     - cron: "0 20 * * *"      # 20:00 UTC = 日本時間 5:00
-  workflow_dispatch:           # 手動でも回せる
+  workflow_dispatch:           # 画面からも回せる
+  push:                        # main に push したら回る（手元から走らせる用）
+    branches: [main]
+    paths-ignore:
+      - "README.md"
+      - "tools/README.md"
 
 permissions:
   contents: read
