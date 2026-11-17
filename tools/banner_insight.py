@@ -587,8 +587,10 @@ def fmt(v, unit="", dash="—"):
 
 
 def cmd_report(args):
-    banners = getattr(args, "_banners", None) or load_json(args.banners)
-    lp = getattr(args, "_lp", None) or load_json(args.lp)
+    banners = getattr(args, "_banners", None)
+    banners = load_json(args.banners) if banners is None else banners
+    lp = getattr(args, "_lp", None)
+    lp = load_json(args.lp) if lp is None else lp
     match = match_banners(banners, lp)
     mmap = {m["name"]: m for m in match}
     perf = parse_perf(args)
@@ -604,6 +606,12 @@ def cmd_report(args):
     L.append(f"- 計測対象のCV: {args.cv_name or '〔要記入：何をCVとして数えているか〕'}")
     L.append("")
 
+    if lp_is_thin(lp):
+        n = len(lp.get("lines", []))
+        L.append(f"> **このLPは本文が{n}行しかありません（診断クイズなど）。**")
+        L.append("> バナーの文言と突き合わせる相手が無いので、下のLP一致率は意味を持ちません。")
+        L.append("> 低い一致率を「LPに出てこない」と読まないでください。")
+        L.append("")
     L.append("## 1. 実績とLP一致（事実）")
     L.append("")
     L.append("| バナー | 消化 | CV | CPA | 配信シェア | LP一致率 | LPに出てこない主な文言 |")
@@ -1024,8 +1032,10 @@ def cmd_view(args):
     import base64
     import io
 
-    banners = getattr(args, "_banners", None) or load_json(args.banners)
-    lp = getattr(args, "_lp", None) or load_json(args.lp)
+    banners = getattr(args, "_banners", None)
+    banners = load_json(args.banners) if banners is None else banners
+    lp = getattr(args, "_lp", None)
+    lp = load_json(args.lp) if lp is None else lp
     match = {m["name"]: m for m in match_banners(banners, lp)}
     pmap, _ = perf_by_banner(banners, parse_perf(args))
 
@@ -1192,7 +1202,8 @@ document.getElementById('sub').textContent = D.period + ' ・ ' + D.account + ' 
 document.getElementById('big').innerHTML =
   [['消化', yen(D.total.cost)], ['CV', D.total.cv + '<small> 件</small>'],
    ['CPA', D.total.cv ? yen(D.total.cost/D.total.cv) : '—']]
-  .map(([k,v]) => '<div><dt>'+k+'</dt><dd>'+v+'</dd></div>').join('');
+  .map(([k,v]) => '<div><dt>'+k+'</dt><dd>'+v+'</dd></div>').join('')
+  + (D.unsetCost ? '<div><dt>CV未設定</dt><dd>'+yen(D.unsetCost)+'<small> の消化</small></dd></div>' : '');
 const f = D.form, l = D.vialp;
 document.getElementById('vs').innerHTML =
   '<div class="hl"><dt>インスタントフォーム</dt><dd>'+(f.cv?yen(f.cost/f.cv):'—')
@@ -1237,8 +1248,11 @@ def write_index(args, data, done, thin_map, line_map):
             d["imgs"].append(r["画像"])
 
     form = bylp.get("http://fb.me/", {"cost": 0.0, "cv": 0.0})
-    tot_cost = sum(v["cost"] for v in bylp.values())
-    tot_cv = sum(v["cv"] for v in bylp.values())
+    # CVの定義が未設定のLPは合計に入れない。0件と未設定を混ぜると読み違える
+    unset = {u for u, _ in bylp.items() if thin_map.get(u) is None and line_map.get(u) is None}
+    tot_cost = sum(v["cost"] for u, v in bylp.items() if u not in unset)
+    tot_cv = sum(v["cv"] for u, v in bylp.items() if u not in unset)
+    unset_cost = sum(v["cost"] for u, v in bylp.items() if u in unset)
     pages = {u: slug for u, slug, _, _ in done}
 
     def thumb(path, px=72):
@@ -1257,7 +1271,7 @@ def write_index(args, data, done, thin_map, line_map):
             continue
         slug = pages.get(u)
         lps.append({
-            "name": re.sub(r"^https?://[^/]+/", "", u) or u,
+            "name": u.replace("https://minnano-sumai.com/", "").replace("https://", ""),
             "page": (slug + ".html") if slug else "",
             "cost": d["cost"], "cv": int(d["cv"]), "n": d["n"],
             "thin": bool(thin_map.get(u)), "lines": line_map.get(u, 0),
@@ -1267,7 +1281,7 @@ def write_index(args, data, done, thin_map, line_map):
     payload = {
         "title": "広告アカウント 効き方一覧",
         "account": data["account"], "period": f"{data['since']}〜{data['until']}",
-        "total": {"cost": tot_cost, "cv": int(tot_cv)},
+        "total": {"cost": tot_cost, "cv": int(tot_cv)}, "unsetCost": unset_cost,
         "form": {"cost": form["cost"], "cv": int(form["cv"])},
         "vialp": {"cost": tot_cost - form["cost"], "cv": int(tot_cv - form["cv"])},
         "zero": {"n": sum(1 for p in lps if not p["cv"]),
@@ -1275,6 +1289,12 @@ def write_index(args, data, done, thin_map, line_map):
         "lps": lps,
     }
     html = INDEX_PAGE.replace("__DATA__", json.dumps(payload, ensure_ascii=False).replace("</", "<\\/"))
+    if not getattr(args, "fragment", False):
+        html = ('<!doctype html><html lang="ja"><head><meta charset="utf-8">'
+                '<meta name="viewport" content="width=device-width,initial-scale=1">'
+                '<style>body{margin:0;font:14px system-ui}img{max-width:100%}'
+                '[hidden]{display:none!important}</style></head><body>'
+                + html + "</body></html>")
     out = os.path.join(args.out, "index.html")
     with open(out, "w", encoding="utf-8") as f:
         f.write(html)
@@ -1291,7 +1311,28 @@ def cmd_from_meta(args):
     import io
     import types
 
-    data = json.load(open(os.path.join(args.dir, "実績.json"), encoding="utf-8"))
+    js = os.path.join(args.dir, "実績.json")
+    if os.path.exists(js):
+        data = json.load(open(js, encoding="utf-8"))
+    else:
+        csvp = os.path.join(args.dir, "実績.csv")
+        if not os.path.exists(csvp):
+            sys.exit(f"実績.json も 実績.csv も無い: {args.dir}")
+        with open(csvp, encoding="utf-8-sig", newline="") as f:
+            rows_ = list(csv.DictReader(f))
+        def _n(v):
+            v = re.sub(r"[^\d\.\-]", "", str(v or ""))
+            try:
+                return float(v) if v not in ("", "-", ".") else 0
+            except ValueError:
+                return 0
+        for r in rows_:
+            for k in ("消化", "表示", "クリック", "CV", "CPA", "CTR"):
+                if k in r:
+                    r[k] = _n(r[k])
+            r["CV未設定"] = str(r.get("CV未設定", "")).lower() in ("true", "1")
+        data = {"account": "(CSVから)", "since": "", "until": "", "rows": rows_}
+        print(f"  （実績.json が無いので 実績.csv から読んだ: {len(rows_)}行）")
     img_dir = os.path.join(args.dir, "画像")
     have = {os.path.splitext(f)[0]: os.path.join(img_dir, f)
             for f in (os.listdir(img_dir) if os.path.isdir(img_dir) else [])}
@@ -1339,7 +1380,8 @@ def cmd_from_meta(args):
         quiet = io.StringIO()
         try:
             with contextlib.redirect_stdout(quiet):
-                a = types.SimpleNamespace(images=[r["画像"] for r in rs], min_conf=0.3, out=None)
+                imgs = list(dict.fromkeys(r["画像"] for r in rs if r.get("画像")))
+                a = types.SimpleNamespace(images=imgs, min_conf=0.3, out=None)
                 banners = cmd_read(a)
                 b = types.SimpleNamespace(url=lp_url, text_file=None, out=None)
                 lp = cmd_lp(b)
@@ -1372,7 +1414,8 @@ def cmd_from_meta(args):
             banners=None, lp=None, _banners=banners, _lp=lp, _perf=perf,
             perf=None, perf_row=None, period=f"{data['since']}〜{data['until']}",
             cv_name=(rs[0].get("CVの種類") or ""), img_width=args.img_width, quality=80,
-            standalone=args.standalone, out=os.path.join(args.out, slug + ".html"))
+            standalone=not getattr(args, "fragment", False),
+            out=os.path.join(args.out, slug + ".html"))
         with contextlib.redirect_stdout(quiet):
             cmd_view(v)
             v.out = os.path.join(args.out, slug + "_レポート.md")
@@ -1509,7 +1552,8 @@ def main():
     p.add_argument("-o", "--out", required=True, help="出力先フォルダ")
     p.add_argument("--min-cost", type=int, default=5000)
     p.add_argument("--img-width", type=int, default=700)
-    p.add_argument("--standalone", action="store_true")
+    p.add_argument("--fragment", action="store_true",
+                   help="doctypeを付けない（Artifactに貼る用。既定は付ける）")
     p.set_defaults(func=cmd_from_meta)
 
     args = ap.parse_args()

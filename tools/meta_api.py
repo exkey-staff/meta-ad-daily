@@ -19,6 +19,7 @@
 """
 import argparse
 import csv
+import datetime as dt
 import json
 import os
 import re
@@ -44,6 +45,10 @@ CV_PREFER = ["offsite_conversion.fct_lead", "lead", "onsite_conversion.lead_grou
              "offsite_conversion.fct_complete_registration", "complete_registration",
              "offsite_conversion.fct_submit_application", "submit_application",
              "offsite_conversion.fct_contact", "contact", "onsite_web_lead"]
+
+
+class TooMuchData(Exception):
+    """Metaが「データ量が多すぎる」と返したとき。期間を割って取り直す合図。"""
 
 
 def token(args):
@@ -82,6 +87,8 @@ def call(path, params, tok, tries=3):
                     err = {"message": body[:300]}
                 msg = err.get("message", "")
                 code = err.get("code")
+                if "reduce the amount of data" in msg.lower() or code == 1:
+                    raise TooMuchData(msg)
                 if "version" in msg.lower() or code == 2635:
                     last = msg
                     break                      # このバージョンは使えない → 次へ
@@ -96,14 +103,44 @@ def call(path, params, tok, tries=3):
     sys.exit(f"Meta APIに繋がらない: {hide(str(last), tok)}")
 
 
+def paged_by_period(path, params, tok, since, until, depth=0):
+    """期間を指定して取る。多すぎると言われたら半分に割って取り直す。
+
+    広告の本数が多いアカウントでは、28日×日別を一度に頼むと上限に当たる。
+    """
+    q = dict(params)
+    q["time_range"] = json.dumps({"since": since, "until": until})
+    try:
+        return paged(path, q, tok)
+    except TooMuchData:
+        a = dt.date.fromisoformat(since)
+        b = dt.date.fromisoformat(until)
+        if a >= b or depth > 6:
+            print(f"  ! {since}〜{until} は分割しても取れない", flush=True)
+            return []
+        mid = a + (b - a) // 2
+        print(f"  （データ量が多いので {since}〜{until} を2つに割って取り直す）", flush=True)
+        return (paged_by_period(path, params, tok, since, str(mid), depth + 1)
+                + paged_by_period(path, params, tok, str(mid + dt.timedelta(days=1)), until, depth + 1))
+
+
 def paged(path, params, tok, limit_pages=50):
     out, after, page = [], None, 0
+    limit = params.get("limit", 200)
     while page < limit_pages:
         q = dict(params)
-        q["limit"] = params.get("limit", 200)
+        q["limit"] = limit
         if after:
             q["after"] = after
-        res = call(path, q, tok)
+        try:
+            res = call(path, q, tok)
+        except TooMuchData:
+            # 一度に頼む件数が多すぎる。半分にして取り直す
+            if limit <= 10:
+                raise
+            limit = max(10, limit // 2)
+            print(f"  （データ量が多いので1回あたり{limit}件に減らす）", flush=True)
+            continue
         out += res.get("data", [])
         cur = (res.get("paging") or {}).get("cursors") or {}
         after = cur.get("after")
@@ -419,12 +456,12 @@ def cmd_insights(args):
 
     tr = json.dumps({"since": args.since, "until": args.until})
     print(f"実績を取得中… {args.account} {args.since}〜{args.until}")
-    q = {"level": "ad", "fields": INSIGHT_FIELDS, "time_range": tr}
+    q = {"level": "ad", "fields": INSIGHT_FIELDS}
     if getattr(args, "daily", False):
         q["time_increment"] = 1
     if args.spent_only:
         q["filtering"] = json.dumps([{"field": "spend", "operator": "GREATER_THAN", "value": 0}])
-    ins = paged(f"{args.account}/insights", q, tok)
+    ins = paged_by_period(f"{args.account}/insights", q, tok, args.since, args.until)
     ins = [r for r in ins if r]
     print(f"  広告 {len(ins)}件")
 
@@ -478,10 +515,14 @@ def cmd_insights(args):
         ad = admap.get(r.get("ad_id"), {})
         cre = ad.get("creative") or {}
         lp = strip_params(lp_url(cre))
-        # LP番号で紐付く命名（サンクス_19 など）があればLPごとに、無ければアカウント共通で
-        want, cv_name = cv_for_lp(lp, ccmap) if (ccmap and not args.cv_action) else (None, "")
-        if not want:
-            want, cv_name = acc_cv, acc_cv_name
+        if not args.cv_action and "fb.me" in (lp or ""):
+            # インスタントフォームはMetaの中で完結するので、LP用のCVでは数えられない
+            want, cv_name = "lead", "lead（インスタントフォーム）"
+        else:
+            # LP番号で紐付く命名（サンクス_19 など）があればLPごとに、無ければアカウント共通で
+            want, cv_name = cv_for_lp(lp, ccmap) if (ccmap and not args.cv_action) else (None, "")
+            if not want:
+                want, cv_name = acc_cv, acc_cv_name
         cv_type, cv = pick_cv(r.get("actions"), want) if want else (None, None)
         cv_unknown = want is None
         spend = float(r.get("spend") or 0)
